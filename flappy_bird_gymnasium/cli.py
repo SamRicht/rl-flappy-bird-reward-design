@@ -31,9 +31,10 @@ import gymnasium
 import pygame
 
 import flappy_bird_gymnasium
-from flappy_bird_gymnasium.tests.test_dqn import play as dqn_agent_env
-from flappy_bird_gymnasium.tests.test_human import play as human_agent_env
-from flappy_bird_gymnasium.tests.test_random import play as random_agent_env
+
+# The agent modules are imported inside their respective branch of main().
+# Reason: test_dqn pulls in TensorFlow, which should not be loaded when
+# starting "--mode human" or "--mode random".
 
 
 def _get_args():
@@ -62,14 +63,25 @@ def main():
     args = _get_args()
 
     if args.mode == "human":
+        from flappy_bird_gymnasium.tests.test_human import play as human_agent_env
+
         human_agent_env()
     elif args.mode == "random":
+        from flappy_bird_gymnasium.tests.test_random import play as random_agent_env
+
         random_agent_env(
             audio_on=(not args.quiet), render_mode="human" if not args.quiet else None
         )
     elif args.mode == "dqn":
-        dqn_agent_env(
-            audio_on=(not args.quiet), render_mode="human" if not args.quiet else None
-        )
+        from flappy_bird_gymnasium.tests.test_dqn import play as dqn_agent_env
+
+        try:
+            dqn_agent_env(
+                audio_on=(not args.quiet),
+                render_mode="human" if not args.quiet else None,
+            )
+        except FileNotFoundError as err:
+            print(err)
+            return 1
     else:
         print("Invalid mode!")
