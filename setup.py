@@ -22,7 +22,11 @@
 # SOFTWARE.
 # ==============================================================================
 
-""" Setup of the flappy-bird-gymnasium package.
+"""Setup of the flappy-bird-gymnasium package.
+
+Fork of https://github.com/markub3327/flappy-bird-gymnasium (MIT), adapted for a
+university project on reward design. The environment itself was written by
+Gabriel Nogueira and Martin Kubovcik (see LICENSE).
 """
 
 from typing import List
@@ -52,18 +56,22 @@ with open("README.md", "r", encoding="utf-8") as fh:
     long_description = fh.read()
 
 setuptools.setup(
-    name="flappy-bird-gymnasium",
+    name="rl-flappy-bird-reward-design",
     version=_VERSION,
-    author="Martin Kubovcik",
-    author_email="markub3327@gmail.com",
+    # Authors of the environment (see LICENSE).
+    author="Gabriel Nogueira, Martin Kubovcik",
+    # Maintainers of this fork.
+    maintainer="Jonathan Künnemann, Colin Hungeling, Max Brinkhoff, Samuel Richter",
     description=short_description,
     long_description=long_description,
     long_description_content_type="text/markdown",
-    url="https://github.com/markub3327/flappy-bird-gymnasium",
+    url="https://github.com/SamRicht/rl-flappy-bird-reward-design",
     project_urls={
-        "Bug Tracker": "https://github.com/markub3327/flappy-bird-gymnasium/issues",
+        "Bug Tracker": (
+            "https://github.com/SamRicht/rl-flappy-bird-reward-design/issues"
+        ),
+        "Upstream": "https://github.com/markub3327/flappy-bird-gymnasium",
     },
-    download_url="https://github.com/markub3327/flappy-bird-gymnasium/releases",
     # Contained modules and scripts:
     packages=setuptools.find_packages(),
     package_data={
