@@ -22,8 +22,7 @@
 # SOFTWARE.
 # ==============================================================================
 
-""" Handles the initialization of the game through the command line interface.
-"""
+"""Handles the initialization of the game through the command line interface."""
 
 import argparse
 import time

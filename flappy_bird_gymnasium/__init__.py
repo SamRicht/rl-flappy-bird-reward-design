@@ -22,8 +22,8 @@
 # SOFTWARE.
 # ==============================================================================
 
-""" Registers the gymnasium environments and exports the `gymnasium.make` function.
-"""
+"""Registers the gymnasium environments and exports the `gymnasium.make` function."""
+
 # Silencing pygame:
 import os
 
