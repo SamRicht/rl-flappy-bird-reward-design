@@ -1,7 +1,7 @@
 """Trains a DQN agent on FlappyBird-v0.
 
 Example:
-    python -m flappy_bird_gymnasium.dqn.train --total-steps 500000 --run-name dqn_v1
+    python -m flappy_bird_gymnasium.dqn.train --run-name dqn_v2 --reward legacy
 """
 
 import argparse
@@ -17,6 +17,7 @@ import numpy as np
 from flappy_bird_gymnasium.dqn.agent import DQNAgent
 from flappy_bird_gymnasium.dqn.config import DQNConfig
 from flappy_bird_gymnasium.dqn.env_utils import make_env, set_global_seeds
+from flappy_bird_gymnasium.rl.rewards import PRESETS
 
 TRAIN_LOG_FIELDS = [
     "step",
@@ -24,11 +25,19 @@ TRAIN_LOG_FIELDS = [
     "return",
     "score",
     "length",
+    "flap_rate",
     "epsilon",
     "loss",
     "q_mean",
 ]
-EVAL_LOG_FIELDS = ["step", "mean_return", "mean_score", "max_score", "mean_length"]
+EVAL_LOG_FIELDS = [
+    "step",
+    "mean_return",
+    "mean_score",
+    "max_score",
+    "mean_length",
+    "mean_flap_rate",
+]
 
 
 class CsvLogger:
@@ -47,16 +56,11 @@ class CsvLogger:
 
 def evaluate(agent: DQNAgent, cfg: DQNConfig, episodes: int, seed: int) -> Dict:
     """Runs the greedy policy for `episodes` episodes on a fresh environment."""
-    env = make_env(
-        use_lidar=cfg.use_lidar,
-        normalize_obs=cfg.normalize_obs,
-        render_mode=None,
-        score_limit=cfg.score_limit,
-    )
-    returns, scores, lengths = [], [], []
+    env = make_env(cfg, render_mode=None)
+    returns, scores, lengths, flap_rates = [], [], [], []
     for i in range(episodes):
         obs, _ = env.reset(seed=seed + i)
-        total, length, info = 0.0, 0, {"score": 0}
+        total, length, info = 0.0, 0, {"score": 0, "flaps": 0}
         while True:
             action = agent.act(obs, epsilon=0.0)
             obs, reward, terminated, truncated, info = env.step(action)
@@ -67,12 +71,14 @@ def evaluate(agent: DQNAgent, cfg: DQNConfig, episodes: int, seed: int) -> Dict:
         returns.append(total)
         scores.append(info["score"])
         lengths.append(length)
+        flap_rates.append(info["flaps"] / max(length, 1))
     env.close()
     return {
         "mean_return": float(np.mean(returns)),
         "mean_score": float(np.mean(scores)),
         "max_score": int(np.max(scores)),
         "mean_length": float(np.mean(lengths)),
+        "mean_flap_rate": float(np.mean(flap_rates)),
     }
 
 
@@ -83,16 +89,12 @@ def train(cfg: DQNConfig, out_dir: Path) -> Path:
         json.dump(cfg.to_dict(), handle, indent=2)
 
     set_global_seeds(cfg.seed)
-    env = make_env(
-        use_lidar=cfg.use_lidar,
-        normalize_obs=cfg.normalize_obs,
-        render_mode=None,
-        score_limit=cfg.score_limit,
+    env = make_env(cfg, render_mode=None)
+    agent = DQNAgent(env.observation_space.shape[0], int(env.action_space.n), config=cfg)
+    print(
+        f"Device: {agent.device} | obs_dim: {agent.obs_dim} | "
+        f"reward: {cfg.reward_preset} | n_step: {cfg.n_step} | run: {out_dir}"
     )
-    agent = DQNAgent(
-        env.observation_space.shape[0], int(env.action_space.n), config=cfg
-    )
-    print(f"Device: {agent.device} | obs_dim: {agent.obs_dim} | run: {out_dir}")
 
     train_logger = CsvLogger(out_dir / "train.csv", TRAIN_LOG_FIELDS)
     eval_logger = CsvLogger(out_dir / "eval.csv", EVAL_LOG_FIELDS)
@@ -113,9 +115,11 @@ def train(cfg: DQNConfig, out_dir: Path) -> Path:
         next_obs, reward, terminated, truncated, info = env.step(action)
 
         # Only `terminated` ends the value bootstrap. A truncation means the
-        # score limit was hit -- the episode stops, but the future was not
+        # step limit was hit -- the episode stops, but the future was not
         # worthless, so it must not be stored as a terminal transition.
         agent.remember(obs, action, reward, next_obs, terminated)
+        if truncated and not terminated:
+            agent.finish_truncated_episode()
 
         obs = next_obs
         ep_return += reward
@@ -137,6 +141,7 @@ def train(cfg: DQNConfig, out_dir: Path) -> Path:
                     "return": round(ep_return, 3),
                     "score": info["score"],
                     "length": ep_length,
+                    "flap_rate": round(info["flaps"] / max(ep_length, 1), 4),
                     "epsilon": round(epsilon, 4),
                     "loss": round(last_metrics["loss"], 5) if last_metrics else "",
                     "q_mean": round(last_metrics["q_mean"], 3) if last_metrics else "",
@@ -161,7 +166,8 @@ def train(cfg: DQNConfig, out_dir: Path) -> Path:
             print(
                 f"  eval @ {step}: mean_score {stats['mean_score']:.2f} | "
                 f"max_score {stats['max_score']} | "
-                f"mean_return {stats['mean_return']:.2f}"
+                f"mean_return {stats['mean_return']:.2f} | "
+                f"flap_rate {stats['mean_flap_rate']:.2f}"
             )
             if stats["mean_score"] > best_score:
                 best_score = stats["mean_score"]
@@ -173,7 +179,10 @@ def train(cfg: DQNConfig, out_dir: Path) -> Path:
 
     agent.save(out_dir / "latest.pt", step=cfg.total_steps)
     env.close()
-    print(f"Done in {(time.time() - started) / 60:.1f} min | best mean score {best_score:.2f}")
+    print(
+        f"Done in {(time.time() - started) / 60:.1f} min | "
+        f"best mean score {best_score:.2f}"
+    )
     return best_path if best_path.exists() else out_dir / "latest.pt"
 
 
@@ -182,11 +191,18 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Train a DQN agent on FlappyBird-v0.")
     parser.add_argument("--run-name", default=defaults.run_name)
     parser.add_argument("--out-dir", default="runs", help="where runs are stored")
+    parser.add_argument(
+        "--reward",
+        default=defaults.reward_preset,
+        choices=sorted(PRESETS),
+        help="reward scheme from flappy_bird_gymnasium.rl.rewards",
+    )
     parser.add_argument("--total-steps", type=int, default=defaults.total_steps)
     parser.add_argument("--seed", type=int, default=defaults.seed)
     parser.add_argument("--learning-rate", type=float, default=defaults.learning_rate)
     parser.add_argument("--batch-size", type=int, default=defaults.batch_size)
     parser.add_argument("--gamma", type=float, default=defaults.gamma)
+    parser.add_argument("--n-step", type=int, default=defaults.n_step)
     parser.add_argument("--buffer-size", type=int, default=defaults.buffer_size)
     parser.add_argument("--learning-starts", type=int, default=defaults.learning_starts)
     parser.add_argument(
@@ -197,7 +213,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--eval-interval", type=int, default=defaults.eval_interval)
     parser.add_argument("--eval-episodes", type=int, default=defaults.eval_episodes)
-    parser.add_argument("--score-limit", type=int, default=defaults.score_limit)
+    parser.add_argument(
+        "--max-episode-steps", type=int, default=defaults.max_episode_steps
+    )
+    parser.add_argument("--pipe-gap", type=int, default=defaults.pipe_gap)
     parser.add_argument("--no-double", action="store_true", help="plain DQN targets")
     parser.add_argument("--no-dueling", action="store_true", help="plain Q-head")
     parser.add_argument("--notes", default="", help="free-text note stored in config")
@@ -208,18 +227,21 @@ def main(argv: Optional[List[str]] = None) -> None:
     args = build_parser().parse_args(argv)
     cfg = DQNConfig(
         run_name=args.run_name,
+        reward_preset=args.reward,
         total_steps=args.total_steps,
         seed=args.seed,
         learning_rate=args.learning_rate,
         batch_size=args.batch_size,
         gamma=args.gamma,
+        n_step=args.n_step,
         buffer_size=args.buffer_size,
         learning_starts=args.learning_starts,
         epsilon_decay_steps=args.epsilon_decay_steps,
         target_update_interval=args.target_update_interval,
         eval_interval=args.eval_interval,
         eval_episodes=args.eval_episodes,
-        score_limit=args.score_limit,
+        max_episode_steps=args.max_episode_steps,
+        pipe_gap=args.pipe_gap,
         double_dqn=not args.no_double,
         dueling=not args.no_dueling,
         notes=args.notes,

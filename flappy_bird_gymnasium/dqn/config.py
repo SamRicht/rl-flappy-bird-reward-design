@@ -9,16 +9,20 @@ class DQNConfig:
     """All knobs of the training run.
 
     The defaults are tuned for the 12-feature observation mode
-    (``use_lidar=False``) and reach a positive score within a few hundred
-    thousand environment steps on CPU.
+    (``use_lidar=False``) and the ``legacy`` reward scheme.
     """
 
     # --- environment ---
     use_lidar: bool = False
     normalize_obs: bool = True
-    # Truncate an episode once this score is reached, so that a good agent
-    # does not produce endless episodes. `None` disables the limit.
-    score_limit: Optional[int] = 100
+    pipe_gap: int = 100
+    # Name of a preset in flappy_bird_gymnasium.rl.rewards.PRESETS. "legacy"
+    # reproduces the upstream reward exactly and is the baseline of the study.
+    reward_preset: str = "legacy"
+    # Step limit per episode. Needed because a competent policy would otherwise
+    # play forever and a single episode could eat the whole training budget.
+    # Reaching it is a truncation and is bootstrapped, never treated as death.
+    max_episode_steps: int = 3_000
 
     # --- network ---
     hidden: Tuple[int, ...] = (256, 256)
@@ -34,21 +38,28 @@ class DQNConfig:
     huber_loss: bool = True
 
     # --- replay ---
-    buffer_size: int = 100_000
+    buffer_size: int = 200_000
     learning_starts: int = 5_000
     train_freq: int = 1
+    # Length of the return stored per transition. n=1 is textbook DQN; larger
+    # n propagates the sparse pipe reward back much faster, at the price of a
+    # slightly off-policy (uncorrected) return.
+    n_step: int = 3
 
     # --- exploration ---
     epsilon_start: float = 1.0
     epsilon_end: float = 0.01
-    epsilon_decay_steps: int = 150_000
+    # The v1 run needed ~250k steps before it cleared the first pipe reliably;
+    # decaying exploration well before that starves the agent of the very
+    # transitions it has to learn from.
+    epsilon_decay_steps: int = 200_000
 
     # --- targets ---
     double_dqn: bool = True
     target_update_interval: int = 1_000
 
     # --- run ---
-    total_steps: int = 500_000
+    total_steps: int = 1_000_000
     seed: int = 42
     eval_interval: int = 25_000
     # 10 episodes are too noisy to pick `best.pt` from -- a lucky run can beat

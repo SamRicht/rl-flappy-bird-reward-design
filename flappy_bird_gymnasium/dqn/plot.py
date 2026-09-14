@@ -7,6 +7,7 @@ Examples:
 
 import argparse
 import csv
+import json
 from pathlib import Path
 from typing import List, Optional
 
@@ -30,6 +31,17 @@ def _read_csv(path: Path) -> dict:
     return {k: np.asarray(v) for k, v in columns.items()}
 
 
+def _label(run_dir: Path) -> str:
+    """Names a run by its directory, plus its reward scheme when one is known."""
+    config_path = run_dir / "config.json"
+    if not config_path.exists():
+        return run_dir.name
+    with open(config_path, encoding="utf-8") as handle:
+        config = json.load(handle)
+    preset = config.get("reward_preset")
+    return f"{run_dir.name} ({preset})" if preset else run_dir.name
+
+
 def _moving_average(values: np.ndarray, window: int) -> np.ndarray:
     if len(values) < window:
         return values
@@ -38,21 +50,26 @@ def _moving_average(values: np.ndarray, window: int) -> np.ndarray:
 
 
 def plot_runs(run_dirs: List[Path], window: int = 50, out: Optional[Path] = None):
-    """Draws score, return, loss and eval score for every run."""
-    fig, axes = plt.subplots(2, 2, figsize=(12, 8))
-    (ax_score, ax_return), (ax_loss, ax_eval) = axes
+    """Draws the learning diagnostics of every run into one figure.
+
+    Returns of different reward schemes are not comparable with each other --
+    that is the point of changing the reward. The *score* panels are, which is
+    why they come first.
+    """
+    fig, axes = plt.subplots(3, 2, figsize=(12, 12))
+    (ax_score, ax_eval), (ax_return, ax_length), (ax_loss, ax_flap) = axes
 
     for run_dir in run_dirs:
-        label = run_dir.name
+        label = _label(run_dir)
         train = _read_csv(run_dir / "train.csv")
         offset = window - 1 if len(train["score"]) >= window else 0
+        steps = train["step"][offset:]
 
-        ax_score.plot(
-            train["step"][offset:], _moving_average(train["score"], window), label=label
-        )
-        ax_return.plot(
-            train["step"][offset:], _moving_average(train["return"], window), label=label
-        )
+        ax_score.plot(steps, _moving_average(train["score"], window), label=label)
+        ax_return.plot(steps, _moving_average(train["return"], window), label=label)
+        ax_length.plot(steps, _moving_average(train["length"], window), label=label)
+        if "flap_rate" in train:
+            ax_flap.plot(steps, _moving_average(train["flap_rate"], window), label=label)
         if "loss" in train:
             # one loss value per episode (the last learning step of it)
             ax_loss.plot(train["step"], train["loss"], label=label, alpha=0.7)
@@ -64,15 +81,20 @@ def plot_runs(run_dirs: List[Path], window: int = 50, out: Optional[Path] = None
                 evaluation["step"], evaluation["mean_score"], marker="o", label=label
             )
 
+    avg = f"moving avg, {window} episodes"
     ax_score.set(
-        title=f"Training score (moving avg, {window} episodes)",
-        xlabel="environment steps",
-        ylabel="score",
+        title=f"Training score ({avg})", xlabel="environment steps", ylabel="score"
+    )
+    ax_eval.set(
+        title="Greedy evaluation", xlabel="environment steps", ylabel="mean score"
     )
     ax_return.set(
-        title=f"Training return (moving avg, {window} episodes)",
+        title=f"Training return ({avg}) -- scheme-specific",
         xlabel="environment steps",
         ylabel="return",
+    )
+    ax_length.set(
+        title=f"Episode length ({avg})", xlabel="environment steps", ylabel="frames"
     )
     ax_loss.set(
         title="TD loss (last learning step of each episode)",
@@ -80,8 +102,8 @@ def plot_runs(run_dirs: List[Path], window: int = 50, out: Optional[Path] = None
         ylabel="huber loss",
     )
     ax_loss.set_yscale("log")
-    ax_eval.set(
-        title="Greedy evaluation", xlabel="environment steps", ylabel="mean score"
+    ax_flap.set(
+        title=f"Flap rate ({avg})", xlabel="environment steps", ylabel="flaps per frame"
     )
     for ax in axes.flat:
         ax.grid(alpha=0.3)
