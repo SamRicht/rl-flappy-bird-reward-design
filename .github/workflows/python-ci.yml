@@ -25,6 +25,9 @@ jobs:
       - name: Install dependencies
         run: |
           python3 -m pip install black isort flake8 pytest Pillow tensorflow matplotlib
+          # The RL code (flappy_bird_gymnasium/rl) needs PyTorch. The CPU wheel
+          # keeps the CI image small; the package itself does not depend on it.
+          python3 -m pip install torch --index-url https://download.pytorch.org/whl/cpu
           python3 -m pip install -e .
      
       - name: Check codestyle

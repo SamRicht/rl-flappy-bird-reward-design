@@ -133,6 +133,10 @@ class FlappyBirdEnv(gymnasium.Env):
         self._reward_config = reward_config or RewardConfig()
         self._prev_potential = 0.0
         self._flap_count = 0
+        # Defaults to the upstream reward scheme, which `RewardConfig()` mirrors.
+        self._reward_config = reward_config or RewardConfig()
+        self._prev_potential = 0.0
+        self._flap_count = 0
 
         self.action_space = gymnasium.spaces.Discrete(2)
         if use_lidar:
@@ -221,6 +225,8 @@ class FlappyBirdEnv(gymnasium.Env):
         """
         flapped = False
         passed_pipe = False
+        flapped = False
+        passed_pipe = False
 
         self._sound_cache = None
         if action == Actions.FLAP:
@@ -228,6 +234,8 @@ class FlappyBirdEnv(gymnasium.Env):
                 self._player_vel_y = PLAYER_FLAP_ACC
                 self._player_flapped = True
                 self._sound_cache = "wing"
+                flapped = True
+                self._flap_count += 1
                 flapped = True
                 self._flap_count += 1
 
@@ -283,6 +291,7 @@ class FlappyBirdEnv(gymnasium.Env):
             self.render()
 
         obs, in_private_zone = self._get_observation()
+        obs, in_private_zone = self._get_observation()
 
         # check
         if self._debug and self._use_lidar:
@@ -324,8 +333,11 @@ class FlappyBirdEnv(gymnasium.Env):
 
         # agent touch the top of the screen as punishment
         touched_ceiling = self._player_y < 0
+        touched_ceiling = self._player_y < 0
 
         # check for crash
+        terminal = self._check_crash()
+        if terminal:
         terminal = self._check_crash()
         if terminal:
             self._sound_cache = "hit"
@@ -382,6 +394,7 @@ class FlappyBirdEnv(gymnasium.Env):
         self._loop_iter = 0
         self._score = 0
         self._flap_count = 0
+        self._flap_count = 0
 
         if self._debug and self._use_lidar:
             self._statistics = {}
@@ -421,6 +434,10 @@ class FlappyBirdEnv(gymnasium.Env):
             self.render()
 
         obs, _ = self._get_observation()
+        self._prev_potential = (
+            self._gap_potential() if self._reward_config.uses_shaping else 0.0
+        )
+        info = {"score": self._score, "flaps": self._flap_count}
         self._prev_potential = (
             self._gap_potential() if self._reward_config.uses_shaping else 0.0
         )
@@ -638,6 +655,7 @@ class FlappyBirdEnv(gymnasium.Env):
                     rot,  # player's rotation
                 ]
             ),
+            False,  # no private zone without LIDAR readings
             False,  # no private zone without LIDAR readings
         )
 
