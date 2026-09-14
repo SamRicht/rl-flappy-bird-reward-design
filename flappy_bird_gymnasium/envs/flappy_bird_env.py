@@ -56,6 +56,7 @@ from flappy_bird_gymnasium.envs.constants import (
     PLAYER_WIDTH,
 )
 from flappy_bird_gymnasium.envs.lidar import LIDAR
+from flappy_bird_gymnasium.rl.rewards import RewardConfig, compute_reward
 
 
 class Actions(IntEnum):
@@ -74,9 +75,21 @@ class FlappyBirdEnv(gymnasium.Env):
         * Difference between the player's y position and the next hole's y
           position.
 
-    The reward received by the agent in each step is equal to the score obtained
-    by the agent in that step. A score point is obtained every time the bird
-    passes a pipe.
+    The reward received by the agent in each step is determined by a
+    :class:`~flappy_bird_gymnasium.rl.rewards.RewardConfig`, which makes the
+    reward function itself an object of study.  The default configuration
+    reproduces the scheme used by the upstream project, so existing code and
+    trained models behave exactly as before unless a config is passed in.
+
+    Where the reward lives, for anyone changing it:
+
+    * ``rl/rewards.py`` holds the weights, the named presets and the rule by
+      which the terms combine.  That file is the one to edit.
+    * ``step`` below only records *what happened* -- pipe passed, crashed,
+      ceiling touched, flapped -- and hands those facts to ``compute_reward``.
+      No weight appears in the game logic.
+    * ``_shaping_term`` / ``_gap_potential`` add the optional dense signal used
+      by the ``"shaped"`` preset; they are inert for every other scheme.
 
     Args:
         screen_size (Tuple[int, int]): The screen's width and height.
@@ -90,6 +103,9 @@ class FlappyBirdEnv(gymnasium.Env):
         background (Optional[str]): Type of background image. The currently
             available types are "day" and "night". If `None`, no background will
             be drawn.
+        reward_config (Optional[RewardConfig]): The reward scheme to use. If
+            `None`, the upstream scheme (alive = +0.1, pipe = +1.0, dead = -1.0,
+            ceiling = -0.5) is used.
     """
 
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 30}
@@ -107,11 +123,16 @@ class FlappyBirdEnv(gymnasium.Env):
         background: Optional[str] = "day",
         score_limit: Optional[int] = None,
         debug: bool = False,
+        reward_config: Optional[RewardConfig] = None,
     ) -> None:
         assert render_mode is None or render_mode in self.metadata["render_modes"]
         self.render_mode = render_mode
         self._debug = debug
         self._score_limit = score_limit
+        # Defaults to the upstream reward scheme, which `RewardConfig()` mirrors.
+        self._reward_config = reward_config or RewardConfig()
+        self._prev_potential = 0.0
+        self._flap_count = 0
 
         self.action_space = gymnasium.spaces.Discrete(2)
         if use_lidar:
@@ -198,8 +219,8 @@ class FlappyBirdEnv(gymnasium.Env):
         Returns:
             `True` if the player is alive and `False` otherwise.
         """
-        terminal = False
-        reward = None
+        flapped = False
+        passed_pipe = False
 
         self._sound_cache = None
         if action == Actions.FLAP:
@@ -207,6 +228,8 @@ class FlappyBirdEnv(gymnasium.Env):
                 self._player_vel_y = PLAYER_FLAP_ACC
                 self._player_flapped = True
                 self._sound_cache = "wing"
+                flapped = True
+                self._flap_count += 1
 
         # check for score
         player_mid_pos = self._player_x + PLAYER_WIDTH / 2
@@ -214,7 +237,7 @@ class FlappyBirdEnv(gymnasium.Env):
             pipe_mid_pos = pipe["x"] + PIPE_WIDTH / 2
             if pipe_mid_pos <= player_mid_pos < pipe_mid_pos + 4:
                 self._score += 1
-                reward = 1  # reward for passed pipe
+                passed_pipe = True
                 self._sound_cache = "point"
 
         # player_index base_x change
@@ -259,12 +282,7 @@ class FlappyBirdEnv(gymnasium.Env):
         if self.render_mode == "human":
             self.render()
 
-        obs, reward_private_zone = self._get_observation()
-        if reward is None:
-            if reward_private_zone is not None:
-                reward = reward_private_zone
-            else:
-                reward = 0.1  # reward for staying alive
+        obs, in_private_zone = self._get_observation()
 
         # check
         if self._debug and self._use_lidar:
@@ -305,14 +323,12 @@ class FlappyBirdEnv(gymnasium.Env):
                 self._statistics["ground_min_value"] = diff
 
         # agent touch the top of the screen as punishment
-        if self._player_y < 0:
-            reward = -0.5
+        touched_ceiling = self._player_y < 0
 
         # check for crash
-        if self._check_crash():
+        terminal = self._check_crash()
+        if terminal:
             self._sound_cache = "hit"
-            reward = -1  # reward for dying
-            terminal = True
             self._player_vel_y = 0
             if self._debug and self._use_lidar:
                 if ((self._player_x + PLAYER_WIDTH) - up_pipe["x"]) > (0 + 5) and (
@@ -328,7 +344,22 @@ class FlappyBirdEnv(gymnasium.Env):
                     f"Ground: {self._statistics['ground_min_value']}"
                 )
 
-        info = {"score": self._score}
+        # The step only *observes* what happened and hands the facts over; the
+        # weighting and the way the terms combine live in RewardConfig, so that
+        # changing the reward never means touching the game logic. Swap schemes
+        # with `gym.make("FlappyBird-v0", reward_config=RewardConfig.preset(...))`;
+        # passing nothing reproduces the original rewards exactly.
+        reward = compute_reward(
+            self._reward_config,
+            passed_pipe=passed_pipe,
+            crashed=terminal,
+            touched_ceiling=touched_ceiling,
+            in_private_zone=in_private_zone,
+            flapped=flapped,
+            shaping=self._shaping_term(terminal),
+        )
+
+        info = {"score": self._score, "flaps": self._flap_count}
 
         return (
             obs,
@@ -350,6 +381,7 @@ class FlappyBirdEnv(gymnasium.Env):
         self._player_idx = 0
         self._loop_iter = 0
         self._score = 0
+        self._flap_count = 0
 
         if self._debug and self._use_lidar:
             self._statistics = {}
@@ -389,8 +421,93 @@ class FlappyBirdEnv(gymnasium.Env):
             self.render()
 
         obs, _ = self._get_observation()
-        info = {"score": self._score}
+        self._prev_potential = (
+            self._gap_potential() if self._reward_config.uses_shaping else 0.0
+        )
+        info = {"score": self._score, "flaps": self._flap_count}
         return obs, info
+
+    def _shaping_term(self, terminal: bool) -> float:
+        """Returns the potential difference ``gamma * Phi(s') - Phi(s)``.
+
+        This is *reward shaping*: an extra reward that gives feedback on every
+        single frame instead of only every ~36th one, when a pipe is passed.
+        It compares how well the bird stood before the move with how well it
+        stands after: flying towards the centre of the next gap scores a small
+        positive term, drifting away from it a small negative one.
+
+        The specific form is what makes it safe to add.  Summed over an episode
+        the terms cancel out pairwise and leave only the constant ``-Phi(s_0)``
+        (the "telescoping" property), and a constant cannot reorder policies by
+        their return.  The shaping therefore speeds learning up *without
+        changing which policy is optimal* -- the guarantee from Ng et al.
+        (1999). 
+
+        Two conditions are required for the guarantee, and both are easy to
+        break by accident:
+
+        1. The potential of a terminal state must be treated as zero, which is
+           the ``0.0 if terminal`` below.  Using the real potential of the state
+           the bird died in would leave a policy-dependent remainder.
+        2. ``shaping_gamma`` must equal the discount factor the agent learns
+           with.  Nothing here can check that, so the training entry point sets
+           the two from the same value; see ``rl/train.py::config_from_args``.
+
+        Args:
+            terminal: Whether the step ended the episode.
+
+        Returns:
+            The shaping term, or ``0.0`` when shaping is disabled (the default,
+            and the case for every reward preset except ``"shaped"``).
+        """
+        config = self._reward_config
+        if not config.uses_shaping:
+            return 0.0
+
+        next_potential = 0.0 if terminal else self._gap_potential()
+        shaping = config.shaping_gamma * next_potential - self._prev_potential
+        # Remember Phi(s') so the next step can use it as its Phi(s). `reset`
+        # primes this with Phi(s_0), otherwise the first step of an episode
+        # would compare against a potential left over from the previous one.
+        self._prev_potential = next_potential
+        return shaping
+
+    def _gap_potential(self) -> float:
+        """Returns the potential ``Phi(s)``: how well the bird is currently placed.
+
+        One number summarising the state, used only by the shaping term above.
+        It is the vertical distance between the bird and the centre of the gap
+        it is flying towards, negated and expressed in screen heights: ``0``
+        exactly on the centre line, about ``-0.8`` at the far end of the screen.
+        Negative throughout, so "less bad" means "better placed".
+
+        The list comprehension selects *which* gap to aim at, and that is less
+        obvious than it looks.  ``_upper_pipes`` holds three pipe pairs in no
+        particular role order -- they are recycled to the right edge once they
+        leave the screen, so any of the three may be the relevant one.  Keeping
+        only pipes whose right edge is still at or ahead of the bird's right
+        edge drops the ones already flown through; the nearest of the survivors
+        is the target.  A fixed index would track the wrong pipe for part of
+        every cycle.
+
+        Returns:
+            The potential, or ``0.0`` in the moment no pipe lies ahead.
+        """
+        player_right = self._player_x + PLAYER_WIDTH
+        gaps = [
+            # (x of the pair, vertical centre between the two pipe mouths)
+            (up_pipe["x"], (up_pipe["y"] + PIPE_HEIGHT + low_pipe["y"]) / 2)
+            for up_pipe, low_pipe in zip(self._upper_pipes, self._lower_pipes)
+            # the pipe has not been passed yet
+            if up_pipe["x"] + PIPE_WIDTH >= player_right
+        ]
+        if not gaps:
+            return 0.0
+
+        # Nearest pipe still ahead = the one the bird has to get through next.
+        _, gap_center = min(gaps, key=lambda gap: gap[0])
+        player_center = self._player_y + PLAYER_HEIGHT / 2
+        return -abs(player_center - gap_center) / self._screen_height
 
     def render(self) -> None:
         """Renders the next frame."""
@@ -521,7 +638,7 @@ class FlappyBirdEnv(gymnasium.Env):
                     rot,  # player's rotation
                 ]
             ),
-            None,
+            False,  # no private zone without LIDAR readings
         )
 
     def _get_observation_lidar(self) -> np.ndarray:
@@ -535,15 +652,12 @@ class FlappyBirdEnv(gymnasium.Env):
             self._ground,
         )
 
-        if np.any(distances < PLAYER_PRIVATE_ZONE):
-            reward = -0.5
-        else:
-            reward = None
+        in_private_zone = bool(np.any(distances < PLAYER_PRIVATE_ZONE))
 
         if self._normalize_obs:
             distances = distances / LIDAR_MAX_DISTANCE
 
-        return distances, reward
+        return distances, in_private_zone
 
     def _make_display(self) -> None:
         """Initializes the pygame's display.
