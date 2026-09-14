@@ -441,7 +441,7 @@ class FlappyBirdEnv(gymnasium.Env):
         (the "telescoping" property), and a constant cannot reorder policies by
         their return.  The shaping therefore speeds learning up *without
         changing which policy is optimal* -- the guarantee from Ng et al.
-        (1999). 
+        (1999).
 
         Two conditions are required for the guarantee, and both are easy to
         break by accident:
