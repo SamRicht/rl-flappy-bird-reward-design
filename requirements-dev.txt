@@ -1,0 +1,21 @@
+# Development dependencies.
+#
+# Installs the runtime requirements as well, so a single command is enough:
+#     pip install -r requirements-dev.txt
+#
+# These four tools are the ones enforced by .github/workflows/python-ci.yml.
+# Run them before pushing:
+#     black ./
+#     isort ./
+#     flake8 ./
+#     pytest flappy_bird_gymnasium/tests/
+#
+# Deliberately unpinned to match the CI workflow. Note that this means a new
+# major release of black can turn the CI red without any change on our side.
+
+-r requirements.txt
+
+black
+flake8
+isort
+pytest

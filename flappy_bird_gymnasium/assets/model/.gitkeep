@@ -1,0 +1,2 @@
+# Location for self-trained checkpoints (e.g. dqn.weights.h5).
+# The pretrained models from the upstream repository were removed.

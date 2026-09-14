@@ -21,7 +21,7 @@
 # SOFTWARE.
 # ==============================================================================
 
-""" Implementation of a Flappy Bird OpenAI gymnasium environment that yields simple
+"""Implementation of a Flappy Bird OpenAI gymnasium environment that yields simple
 numerical information about the game's state as observations.
 
 Some of the code in this module is an adaption of the code in the `FlapPyBird`
