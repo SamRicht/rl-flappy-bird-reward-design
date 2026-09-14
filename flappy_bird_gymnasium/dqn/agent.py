@@ -10,7 +10,7 @@ import torch.nn.functional as F
 
 from flappy_bird_gymnasium.dqn.config import DQNConfig
 from flappy_bird_gymnasium.dqn.model import build_q_network
-from flappy_bird_gymnasium.dqn.replay_buffer import ReplayBuffer
+from flappy_bird_gymnasium.dqn.replay_buffer import NStepAccumulator, ReplayBuffer
 
 
 class DQNAgent:
@@ -45,6 +45,7 @@ class DQNAgent:
             self.q_net.parameters(), lr=self.cfg.learning_rate
         )
         self.buffer = ReplayBuffer(self.cfg.buffer_size, obs_dim, seed=self.cfg.seed)
+        self._n_step = NStepAccumulator(self.cfg.n_step, self.cfg.gamma)
         self._rng = np.random.default_rng(self.cfg.seed)
         self.train_steps = 0
 
@@ -68,8 +69,19 @@ class DQNAgent:
         return int(q_values.argmax(dim=-1).item())
 
     def remember(self, obs, action, reward, next_obs, terminated) -> None:
-        """Stores a transition. Pass `terminated`, never `truncated`."""
-        self.buffer.add(obs, action, reward, next_obs, terminated)
+        """Feeds a step to the n-step accumulator and stores what it completes.
+
+        Pass `terminated` only -- a `truncated` episode must be ended with
+        `finish_truncated_episode`, so that its last transitions keep their
+        bootstrap instead of being marked as deaths.
+        """
+        for transition in self._n_step.push(obs, action, reward, next_obs, terminated):
+            self.buffer.add(*transition)
+
+    def finish_truncated_episode(self) -> None:
+        """Flushes the accumulator when an episode was cut short, not ended."""
+        for transition in self._n_step.flush():
+            self.buffer.add(*transition)
 
     # ---------------------------------------------------------------- learning
 
@@ -81,12 +93,10 @@ class DQNAgent:
         if len(self.buffer) < max(self.cfg.learning_starts, self.cfg.batch_size):
             return None
 
-        obs, actions, rewards, next_obs, dones = self.buffer.sample(self.cfg.batch_size)
-        obs = torch.as_tensor(obs, device=self.device)
-        actions = torch.as_tensor(actions, device=self.device)
-        rewards = torch.as_tensor(rewards, device=self.device)
-        next_obs = torch.as_tensor(next_obs, device=self.device)
-        dones = torch.as_tensor(dones, device=self.device)
+        batch = self.buffer.sample(self.cfg.batch_size)
+        obs, actions, rewards, next_obs, dones, discounts = (
+            torch.as_tensor(item, device=self.device) for item in batch
+        )
 
         # Q(s, a) for the actions that were actually taken
         q_taken = self.q_net(obs).gather(1, actions.unsqueeze(1)).squeeze(1)
@@ -99,7 +109,10 @@ class DQNAgent:
                 next_q = self.target_net(next_obs).gather(1, next_actions).squeeze(1)
             else:
                 next_q = self.target_net(next_obs).max(dim=-1).values
-            targets = rewards + self.cfg.gamma * (1.0 - dones) * next_q
+            # `discounts` is gamma ** horizon, stored per transition, because
+            # the n-step horizon is shorter for the steps flushed at the end
+            # of an episode.
+            targets = rewards + discounts * (1.0 - dones) * next_q
 
         if self.cfg.huber_loss:
             loss = F.smooth_l1_loss(q_taken, targets)
