@@ -30,18 +30,17 @@ class DQNAgent:
             device or ("cuda" if torch.cuda.is_available() else "cpu")
         )
 
-        # Seed the global Torch RNG here, not only in the training script: the
-        # weights are drawn from it, so without this an agent built with a
-        # given seed still starts from different weights depending on what ran
-        # before it in the same process. A seed study is worthless if "seed 3"
-        # does not reproduce.
+        # The weights are drawn from the global Torch RNG, so the same seed has
+        # to produce the same initial network for a seed study to mean
+        # anything. Seed it around the network build and put the previous state
+        # back afterwards -- `load()` also runs through here, and a checkpoint
+        # being read must not silently reset the RNG of the whole process.
+        rng_state = torch.get_rng_state()
         torch.manual_seed(self.cfg.seed)
-        if torch.cuda.is_available():
-            torch.cuda.manual_seed_all(self.cfg.seed)
-
         self.q_net = build_q_network(
             obs_dim, n_actions, self.cfg.hidden, self.cfg.dueling
         ).to(self.device)
+        torch.set_rng_state(rng_state)
 
         # The target network provides the bootstrap value. Freezing it for a
         # while is what keeps the regression target from chasing its own tail.
@@ -138,11 +137,7 @@ class DQNAgent:
         if self.train_steps % self.cfg.target_update_interval == 0:
             self.sync_target()
 
-        return {
-            "loss": float(loss.item()),
-            "q_mean": float(q_taken.mean().item()),
-            "target_mean": float(targets.mean().item()),
-        }
+        return {"loss": float(loss.item()), "q_mean": float(q_taken.mean().item())}
 
     def sync_target(self) -> None:
         """Copies the online weights into the target network."""

@@ -33,15 +33,15 @@ import csv
 import json
 import os
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from dataclasses import replace
 from pathlib import Path
 from typing import Dict, List, Optional
 
 import numpy as np
 
 from flappy_bird_gymnasium.dqn.config import DQNConfig
-from flappy_bird_gymnasium.dqn.env_utils import make_env
+from flappy_bird_gymnasium.dqn.env_utils import make_env, rollout, summarize_rollout
 from flappy_bird_gymnasium.dqn.evaluate import play
+from flappy_bird_gymnasium.dqn.train import THRESHOLDS
 
 #: Metrics carried through from the per-run evaluation.
 EVAL_METRICS = [
@@ -54,8 +54,35 @@ EVAL_METRICS = [
     "truncation_rate",
 ]
 
-#: Sample-efficiency metrics read from each run's summary.json.
-EFFICIENCY_METRICS = ["steps_to_1", "steps_to_5", "steps_to_10", "steps_to_25", "steps_to_50"]
+#: Sample-efficiency metrics read from each run's summary.json, derived from
+#: the same thresholds the training run used so the two cannot drift apart.
+EFFICIENCY_METRICS = [f"steps_to_{threshold}" for threshold in THRESHOLDS]
+
+#: Columns of the two output files.
+PER_RUN_FIELDS = [
+    "algorithm",
+    "run",
+    "variant",
+    "run_seed",
+    *EVAL_METRICS,
+    *EFFICIENCY_METRICS,
+    "minutes",
+]
+AGGREGATE_FIELDS = [
+    "algorithm",
+    "variant",
+    "seeds",
+    "score_mean",
+    "score_std",
+    "score_min_seed",
+    "score_max_seed",
+    "length_mean",
+    "flap_rate_mean",
+    "truncation_rate",
+    "minutes_mean",
+    *EFFICIENCY_METRICS,
+    *[f"{metric}_reached" for metric in EFFICIENCY_METRICS],
+]
 
 
 def _evaluate_one(job: Dict) -> Dict:
@@ -81,39 +108,27 @@ def _evaluate_one(job: Dict) -> Dict:
     return result
 
 
-def random_baseline(config: DQNConfig, episodes: int, seed: int) -> Dict:
+def random_baseline(
+    config: DQNConfig, episodes: int, seed: int, max_episode_steps: int
+) -> Dict:
     """Measures a uniformly random policy on the same episodes as the agents.
 
     Every score in a comparison is read against this. Without it "DQN reaches
     304 pipes" carries no information -- and across four learning methods the
-    random floor is the one row every chart can be anchored to.
+    random floor is the one row every chart can be anchored to. It goes through
+    the same `rollout` as the trained agents, so it is measured identically by
+    construction rather than by careful copying.
     """
-    env = make_env(config, render_mode=None, evaluation=True)
+    env = make_env(config, render_mode=None, max_episode_steps=max_episode_steps)
     rng = np.random.default_rng(seed)
-    scores, lengths = [], []
-    for i in range(episodes):
-        env.reset(seed=seed + i)
-        length, info = 0, {"score": 0, "flaps": 0}
-        while True:
-            _, _, terminated, truncated, info = env.step(int(rng.integers(2)))
-            length += 1
-            if terminated or truncated:
-                break
-        scores.append(info["score"])
-        lengths.append(length)
+    measured = rollout(env, lambda obs: int(rng.integers(2)), episodes, seed)
     env.close()
     return {
         "run": "random",
         "variant": "random",
         "run_seed": seed,
         "algorithm": "random",
-        "mean_score": float(np.mean(scores)),
-        "median_score": float(np.median(scores)),
-        "max_score": int(np.max(scores)),
-        "min_score": int(np.min(scores)),
-        "mean_length": float(np.mean(lengths)),
-        "mean_flap_rate": 0.5,
-        "truncation_rate": 0.0,
+        **summarize_rollout(measured),
     }
 
 
@@ -130,6 +145,7 @@ def collect_runs(study_root: Path) -> List[Dict]:
             continue
         with open(config_path, encoding="utf-8") as handle:
             config = json.load(handle)
+        # "variant_seedN" -> "variant"
         summary_path = run_dir / "summary.json"
         summary = {}
         if summary_path.exists():
@@ -150,18 +166,14 @@ def collect_runs(study_root: Path) -> List[Dict]:
 
 
 def evaluate_study(
-    study_root: Path,
+    runs: List[Dict],
     episodes: int,
     seed: int,
     checkpoint: str,
     workers: int,
     max_episode_steps: Optional[int] = None,
 ) -> List[Dict]:
-    """Evaluates every run of the study on identical episode seeds."""
-    runs = collect_runs(study_root)
-    if not runs:
-        raise SystemExit(f"keine fertigen Laeufe unter {study_root}")
-
+    """Evaluates every run on identical episode seeds, so results are paired."""
     jobs = [
         {
             "run_dir": str(run["run_dir"]),
@@ -299,8 +311,11 @@ def main(argv: Optional[List[str]] = None) -> None:
     args = parser.parse_args(argv)
 
     workers = args.workers or max(1, (os.cpu_count() or 2) - 2)
+    runs = collect_runs(args.study_root)
+    if not runs:
+        raise SystemExit(f"keine fertigen Laeufe unter {args.study_root}")
     results = evaluate_study(
-        args.study_root,
+        runs,
         episodes=args.episodes,
         seed=args.seed,
         checkpoint=args.checkpoint,
@@ -310,39 +325,19 @@ def main(argv: Optional[List[str]] = None) -> None:
     rows = aggregate(results)
 
     if not args.no_baseline:
-        runs = collect_runs(args.study_root)
-        config = DQNConfig.from_dict(runs[0]["config"])
-        if args.max_episode_steps:
-            config = replace(config, eval_max_episode_steps=args.max_episode_steps)
         print("Zufalls-Referenz ...")
-        results.append(random_baseline(config, args.episodes, args.seed))
+        config = DQNConfig.from_dict(runs[0]["config"])
+        results.append(
+            random_baseline(
+                config,
+                args.episodes,
+                args.seed,
+                args.max_episode_steps or config.eval_max_episode_steps,
+            )
+        )
 
-    per_run_fields = [
-        "algorithm",
-        "run",
-        "variant",
-        "run_seed",
-        *EVAL_METRICS,
-        *EFFICIENCY_METRICS,
-        "minutes",
-    ]
-    write_csv(args.study_root / "evaluations.csv", results, per_run_fields)
-    aggregate_fields = [
-        "algorithm",
-        "variant",
-        "seeds",
-        "score_mean",
-        "score_std",
-        "score_min_seed",
-        "score_max_seed",
-        "length_mean",
-        "flap_rate_mean",
-        "truncation_rate",
-        "minutes_mean",
-        *EFFICIENCY_METRICS,
-        *[f"{m}_reached" for m in EFFICIENCY_METRICS],
-    ]
-    write_csv(args.study_root / "aggregate.csv", rows, aggregate_fields)
+    write_csv(args.study_root / "evaluations.csv", results, PER_RUN_FIELDS)
+    write_csv(args.study_root / "aggregate.csv", rows, AGGREGATE_FIELDS)
 
     print_table(rows)
     print(

@@ -8,11 +8,17 @@ Examples:
 import argparse
 import csv
 import json
+import sys
 from pathlib import Path
 from typing import List, Optional
 
-import matplotlib.pyplot as plt
+import matplotlib
 import numpy as np
+
+# a study is usually plotted to a file on a machine with no display
+if "--out" in sys.argv:
+    matplotlib.use("Agg")
+import matplotlib.pyplot as plt  # noqa: E402  (must follow the backend choice)
 
 
 def _read_csv(path: Path) -> dict:
@@ -112,7 +118,7 @@ def plot_runs(run_dirs: List[Path], window: int = 50, out: Optional[Path] = None
 
     if out is not None:
         fig.savefig(out, dpi=150)
-        print(f"saved {out}")
+        print(f"gespeichert: {out}")
     else:
         plt.show()
 

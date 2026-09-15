@@ -9,10 +9,8 @@ import argparse
 from pathlib import Path
 from typing import List, Optional
 
-import numpy as np
-
 from flappy_bird_gymnasium.dqn.agent import DQNAgent
-from flappy_bird_gymnasium.dqn.env_utils import make_env
+from flappy_bird_gymnasium.dqn.env_utils import make_env, rollout, summarize_rollout
 
 
 def play(
@@ -22,89 +20,60 @@ def play(
     audio: bool = False,
     max_episode_steps: Optional[int] = None,
     seed: int = 0,
-    epsilon: float = 0.0,
     verbose: bool = True,
 ) -> dict:
-    """Runs the (near-)greedy policy and reports per-episode results.
+    """Measures a checkpoint's greedy policy and reports the result.
 
     The environment is rebuilt from the config stored in the checkpoint, so the
-    agent is always measured under the reward scheme it was trained on, and by
-    default against the *measuring* frame limit rather than the training one.
-
-    Args:
-        seed: episodes use `seed, seed+1, ...`, so two checkpoints measured with
-            the same seed see identical pipe layouts and the comparison is
-            paired rather than confounded by luck of the draw.
+    agent is always measured under the reward scheme it was trained on — and by
+    default against the measuring frame limit, not the training one. See the
+    README section on censored scores for why that distinction matters.
     """
     agent = DQNAgent.load(checkpoint)
     agent.q_net.eval()
 
+    limit = max_episode_steps or agent.cfg.eval_max_episode_steps
     env = make_env(
         agent.cfg,
         render_mode="human" if render else None,
         audio_on=audio and render,
-        max_episode_steps=max_episode_steps,
-        evaluation=True,
+        max_episode_steps=limit,
     )
-    limit = max_episode_steps or agent.cfg.eval_max_episode_steps
     if verbose:
         print(
-            f"reward preset: {agent.cfg.reward_preset} | "
-            f"n_step: {agent.cfg.n_step} | seed {agent.cfg.seed} | "
-            f"frame limit {limit}"
+            f"Reward-Preset {agent.cfg.reward_preset} | n_step {agent.cfg.n_step} | "
+            f"Trainings-Seed {agent.cfg.seed} | Frame-Limit {limit}"
         )
 
-    returns, scores, lengths, flap_rates, truncations = [], [], [], [], []
-    for i in range(episodes):
-        obs, _ = env.reset(seed=seed + i)
-        total, length, info = 0.0, 0, {"score": 0, "flaps": 0}
-        while True:
-            action = agent.act(obs, epsilon=epsilon)
-            obs, reward, terminated, truncated, info = env.step(action)
-            total += reward
-            length += 1
-            if terminated or truncated:
-                break
-        returns.append(total)
-        scores.append(info["score"])
-        lengths.append(length)
-        flap_rates.append(info["flaps"] / max(length, 1))
-        truncations.append(bool(truncated and not terminated))
-        if verbose:
-            print(
-                f"episode {i + 1:>3}: score {info['score']:>4} | "
-                f"return {total:8.2f} | frames {length:>5} | "
-                f"flap rate {flap_rates[-1]:.2f}"
-                + ("  (Limit erreicht)" if truncations[-1] else "")
-            )
+    measured = rollout(env, lambda obs: agent.act(obs), episodes, seed)
     env.close()
 
-    summary = {
-        "episodes": episodes,
-        "mean_score": float(np.mean(scores)),
-        "median_score": float(np.median(scores)),
-        "std_score": float(np.std(scores)),
-        "max_score": int(np.max(scores)),
-        "min_score": int(np.min(scores)),
-        "mean_return": float(np.mean(returns)),
-        "mean_length": float(np.mean(lengths)),
-        "mean_flap_rate": float(np.mean(flap_rates)),
-        "truncation_rate": float(np.mean(truncations)),
-        "frame_limit": int(limit),
-    }
+    if verbose:
+        for index in range(episodes):
+            print(
+                f"Episode {index + 1:>3}: Score {measured['score'][index]:>4} | "
+                f"Return {measured['return'][index]:8.2f} | "
+                f"Frames {measured['length'][index]:>5} | "
+                f"Flap-Rate {measured['flap_rate'][index]:.2f}"
+                + ("  (Limit erreicht)" if measured["truncated"][index] else "")
+            )
+
+    summary = {"episodes": episodes, "frame_limit": int(limit)}
+    summary.update(summarize_rollout(measured))
+
     if verbose:
         print(
-            f"\n{episodes} episodes | mean score {summary['mean_score']:.2f} "
-            f"± {summary['std_score']:.2f} "
-            f"(median {summary['median_score']:.0f}, "
+            f"\n{episodes} Episoden | Score {summary['mean_score']:.2f} "
+            f"+/- {summary['std_score']:.2f} "
+            f"(Median {summary['median_score']:.0f}, "
             f"min {summary['min_score']}, max {summary['max_score']}) | "
-            f"flap rate {summary['mean_flap_rate']:.2f}"
+            f"Flap-Rate {summary['mean_flap_rate']:.2f}"
         )
         if summary["truncation_rate"] > 0:
             print(
                 f"WARNUNG: {summary['truncation_rate']:.0%} der Episoden liefen ins "
-                f"Frame-Limit von {limit}. Der Score ist nach oben zensiert -- "
-                f"mit --max-episode-steps hoeher messen."
+                f"Frame-Limit von {limit}. Der Score ist nach oben zensiert — "
+                f"mit hoeherem --max-episode-steps nachmessen."
             )
     return summary
 
@@ -119,15 +88,9 @@ def main(argv: Optional[List[str]] = None) -> None:
         "--max-episode-steps",
         type=int,
         default=None,
-        help="frame limit per episode (default: the value the run was trained with)",
+        help="frame limit per episode (default: the run's measuring limit)",
     )
     parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument(
-        "--epsilon",
-        type=float,
-        default=0.0,
-        help="exploration during evaluation, 0 = fully greedy",
-    )
     args = parser.parse_args(argv)
     play(
         checkpoint=args.checkpoint,
@@ -136,7 +99,6 @@ def main(argv: Optional[List[str]] = None) -> None:
         audio=args.audio,
         max_episode_steps=args.max_episode_steps,
         seed=args.seed,
-        epsilon=args.epsilon,
     )
 
 

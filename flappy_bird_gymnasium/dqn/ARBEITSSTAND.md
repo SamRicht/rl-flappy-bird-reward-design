@@ -504,7 +504,19 @@ jemals repliziert war.
 *Folge:* `experiments.py` und `summarize.py`; keine Aussage mehr ohne mehrere
 Seeds.
 
-### 9.5 Drei Fehleinschätzungen während laufender Trainings
+### 9.5 Die Zufalls-Referenz war geschätzt statt gemessen
+
+Die Referenzzeile trug eine fest eingetragene Flap-Rate von 0,5 — mit dem
+Argument, eine Gleichverteilung über zwei Aktionen flattere eben in der Hälfte
+der Fälle. Gemessen sind es **0,375**: Der Vogel kann oberhalb des
+Bildschirmrands nicht flattern, die Aktion verpufft also manchmal.
+
+*Folge:* Alle Messungen laufen jetzt durch dieselbe `rollout`-Funktion — die
+trainierten Agenten und die Referenz. Damit ist die Referenz per Konstruktion
+so gemessen wie das, wofür sie die Referenz ist, statt durch sorgfältiges
+Abschreiben.
+
+### 9.6 Drei Fehleinschätzungen während laufender Trainings
 
 Bei 200.000 Schritten von `dqn_v1` lautete die Prognose, 500.000 Schritte würden
 nicht reichen — der Agent brach bei 250.000 aus dem Plateau aus. Beim n-step-A/B

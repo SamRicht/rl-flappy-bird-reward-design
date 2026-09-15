@@ -15,13 +15,14 @@ from typing import Dict, List, Optional
 import numpy as np
 
 from flappy_bird_gymnasium.dqn.agent import DQNAgent
-from flappy_bird_gymnasium.dqn.config import DQNConfig
+from flappy_bird_gymnasium.dqn.config import DQNConfig, add_config_arguments
 from flappy_bird_gymnasium.dqn.env_utils import (
     limit_torch_threads,
     make_env,
+    rollout,
     set_global_seeds,
+    summarize_rollout,
 )
-from flappy_bird_gymnasium.rl.rewards import PRESETS
 
 TRAIN_LOG_FIELDS = [
     "step",
@@ -34,11 +35,15 @@ TRAIN_LOG_FIELDS = [
     "loss",
     "q_mean",
 ]
+#: Columns of eval.csv: the step plus everything `summarize_rollout` reports.
 EVAL_LOG_FIELDS = [
     "step",
     "mean_return",
     "mean_score",
+    "median_score",
+    "std_score",
     "max_score",
+    "min_score",
     "mean_length",
     "mean_flap_rate",
     "truncation_rate",
@@ -51,57 +56,38 @@ THRESHOLDS = (1, 5, 10, 25, 50)
 
 
 class CsvLogger:
-    """Appends rows to a CSV file, writing the header on creation."""
+    """Appends rows to a CSV file, holding the handle open for the whole run.
+
+    Flushes after every row so a run that is killed still leaves a readable
+    log, without paying for reopening the file thousands of times.
+    """
 
     def __init__(self, path: Path, fieldnames: List[str]):
-        self.path = path
-        self.fieldnames = fieldnames
-        with open(path, "w", newline="", encoding="utf-8") as handle:
-            csv.DictWriter(handle, fieldnames=fieldnames).writeheader()
+        self._file = path.open("w", newline="", encoding="utf-8")
+        self._writer = csv.DictWriter(self._file, fieldnames=fieldnames)
+        self._writer.writeheader()
 
     def log(self, row: Dict) -> None:
-        with open(self.path, "a", newline="", encoding="utf-8") as handle:
-            csv.DictWriter(handle, fieldnames=self.fieldnames).writerow(row)
+        self._writer.writerow(row)
+        self._file.flush()
+
+    def close(self) -> None:
+        self._file.close()
 
 
-def evaluate(agent: DQNAgent, cfg: DQNConfig, episodes: int, seed: int) -> Dict:
-    """Runs the greedy policy for `episodes` episodes on a fresh environment.
+def quick_eval(agent: DQNAgent, cfg: DQNConfig, episodes: int, seed: int) -> Dict:
+    """Cheap greedy evaluation for the learning curve, run during training.
 
-    Uses the *training* step limit, not the (much higher) measuring limit: this
-    evaluation exists to draw the learning curve cheaply, and a competent
-    policy would otherwise make it cost more than the training itself. The
-    price is that its score saturates once the policy outlives the limit --
-    `truncation_rate` reports exactly when that happens, and the number for a
-    report comes from `evaluate.py` or `summarize.py` instead.
+    Deliberately uses the *training* frame limit: a competent policy would
+    otherwise make this cost more than the training itself. The price is a
+    score that saturates once the policy outlives the limit, which
+    `truncation_rate` reports. Numbers for a report come from `evaluate.py` or
+    `summarize.py`, which measure against the higher limit.
     """
     env = make_env(cfg, render_mode=None)
-    returns, scores, lengths, flap_rates, truncations = [], [], [], [], []
-    for i in range(episodes):
-        obs, _ = env.reset(seed=seed + i)
-        total, length, info = 0.0, 0, {"score": 0, "flaps": 0}
-        while True:
-            action = agent.act(obs, epsilon=0.0)
-            obs, reward, terminated, truncated, info = env.step(action)
-            total += reward
-            length += 1
-            if terminated or truncated:
-                break
-        returns.append(total)
-        scores.append(info["score"])
-        lengths.append(length)
-        flap_rates.append(info["flaps"] / max(length, 1))
-        truncations.append(bool(truncated and not terminated))
+    measured = rollout(env, lambda obs: agent.act(obs), episodes, seed)
     env.close()
-    return {
-        "mean_return": float(np.mean(returns)),
-        "mean_score": float(np.mean(scores)),
-        "max_score": int(np.max(scores)),
-        "mean_length": float(np.mean(lengths)),
-        "mean_flap_rate": float(np.mean(flap_rates)),
-        # 1.0 means every episode hit the limit -- the score is now censored
-        # and no longer distinguishes better policies from each other.
-        "truncation_rate": float(np.mean(truncations)),
-    }
+    return summarize_rollout(measured)
 
 
 def steps_to_thresholds(
@@ -158,9 +144,9 @@ def train(
     agent = DQNAgent(env.observation_space.shape[0], int(env.action_space.n), config=cfg)
     if verbose:
         print(
-            f"Device: {agent.device} | obs_dim: {agent.obs_dim} | "
-            f"reward: {cfg.reward_preset} | n_step: {cfg.n_step} | "
-            f"seed: {cfg.seed} | run: {out_dir}"
+            f"Geraet {agent.device} | Beobachtung {agent.obs_dim}-dim | "
+            f"Reward {cfg.reward_preset} | n_step {cfg.n_step} | "
+            f"Seed {cfg.seed} | Lauf {out_dir}"
         )
 
     train_logger = CsvLogger(out_dir / "train.csv", TRAIN_LOG_FIELDS)
@@ -173,7 +159,8 @@ def train(
     episode_scores: List[float] = []
     best_score = -np.inf
     best_path = out_dir / "best.pt"
-    best_stats: Dict = {}
+    best_truncation = 0.0
+    recent_evals = deque(maxlen=3)
     episode = 0
     started = time.time()
 
@@ -224,38 +211,46 @@ def train(
                 elapsed = time.time() - started
                 loss_str = f"{last_metrics['loss']:.4f}" if last_metrics else "n/a"
                 print(
-                    f"step {step:>7} | ep {episode:>5} | "
-                    f"return(50) {np.mean(recent_returns):7.2f} | "
-                    f"score(50) {np.mean(recent_scores):6.2f} | "
-                    f"eps {epsilon:.3f} | loss {loss_str} | "
-                    f"{step / max(elapsed, 1e-9):.0f} steps/s"
+                    f"Schritt {step:>7} | Episode {episode:>5} | "
+                    f"Return(50) {np.mean(recent_returns):7.2f} | "
+                    f"Score(50) {np.mean(recent_scores):6.2f} | "
+                    f"eps {epsilon:.3f} | Loss {loss_str} | "
+                    f"{step / max(elapsed, 1e-9):.0f} Schritte/s"
                 )
             obs, _ = env.reset()
             ep_return, ep_length = 0.0, 0
 
         if step % cfg.eval_interval == 0:
-            stats = evaluate(agent, cfg, cfg.eval_episodes, seed=cfg.seed + 10_000)
+            stats = quick_eval(agent, cfg, cfg.eval_episodes, seed=cfg.seed + 10_000)
             eval_logger.log({"step": step, **stats})
+            recent_evals.append(stats["mean_score"])
+            # Judge a checkpoint by the average of the last few evaluations,
+            # not by a single one: the maximum over dozens of noisy 10-episode
+            # draws is biased upwards by construction and would pick the
+            # luckiest evaluation rather than the best policy.
+            smoothed = float(np.mean(recent_evals))
             if verbose:
                 censored = " [ZENSIERT]" if stats["truncation_rate"] >= 1.0 else ""
                 print(
-                    f"  eval @ {step}: mean_score {stats['mean_score']:.2f}{censored} | "
-                    f"max_score {stats['max_score']} | "
-                    f"trunc {stats['truncation_rate']:.2f} | "
-                    f"flap_rate {stats['mean_flap_rate']:.2f}"
+                    f"  Eval @ {step}: Score {stats['mean_score']:.2f}{censored} | "
+                    f"geglaettet {smoothed:.2f} | max {stats['max_score']} | "
+                    f"Limit-Anteil {stats['truncation_rate']:.2f} | "
+                    f"Flap-Rate {stats['mean_flap_rate']:.2f}"
                 )
-            if stats["mean_score"] > best_score:
-                best_score = stats["mean_score"]
-                best_stats = stats
+            if smoothed > best_score:
+                best_score = smoothed
+                best_truncation = stats["truncation_rate"]
                 agent.save(best_path, step=step, eval_stats=stats)
                 if verbose:
-                    print(f"  new best ({best_score:.2f}) -> {best_path.name}")
+                    print(f"  neuer Bestwert ({best_score:.2f}) -> {best_path.name}")
 
         if step % cfg.checkpoint_interval == 0:
             agent.save(out_dir / "latest.pt", step=step)
 
     agent.save(out_dir / "latest.pt", step=cfg.total_steps)
     env.close()
+    train_logger.close()
+    eval_logger.close()
 
     minutes = (time.time() - started) / 60
     summary = {
@@ -267,7 +262,7 @@ def train(
         "episodes": episode,
         "minutes": round(minutes, 2),
         "best_eval_score": float(best_score),
-        "best_eval_truncation_rate": float(best_stats.get("truncation_rate", 0.0)),
+        "best_eval_truncation_rate": float(best_truncation),
         "train_score_last_50": float(np.mean(recent_scores)) if recent_scores else 0.0,
         **steps_to_thresholds(episode_steps, episode_scores),
     }
@@ -276,9 +271,9 @@ def train(
 
     if verbose:
         print(
-            f"Done in {minutes:.1f} min | best eval score {best_score:.2f}"
+            f"Fertig in {minutes:.1f} min | bester Eval-Score {best_score:.2f}"
             + (
-                "  (zensiert durch das Schrittlimit -- echte Zahl via evaluate.py)"
+                "  (zensiert durch das Frame-Limit — echte Zahl via evaluate.py)"
                 if summary["best_eval_truncation_rate"] >= 1.0
                 else ""
             )
@@ -287,76 +282,32 @@ def train(
 
 
 def build_parser() -> argparse.ArgumentParser:
-    defaults = DQNConfig()
     parser = argparse.ArgumentParser(description="Train a DQN agent on FlappyBird-v0.")
-    parser.add_argument("--run-name", default=defaults.run_name)
+    parser.add_argument("--run-name", default=DQNConfig().run_name)
     parser.add_argument("--out-dir", default="runs", help="where runs are stored")
-    parser.add_argument(
-        "--reward",
-        default=defaults.reward_preset,
-        choices=sorted(PRESETS),
-        help="reward scheme from flappy_bird_gymnasium.rl.rewards",
-    )
-    parser.add_argument("--total-steps", type=int, default=defaults.total_steps)
-    parser.add_argument("--seed", type=int, default=defaults.seed)
-    parser.add_argument("--learning-rate", type=float, default=defaults.learning_rate)
-    parser.add_argument("--batch-size", type=int, default=defaults.batch_size)
-    parser.add_argument("--gamma", type=float, default=defaults.gamma)
-    parser.add_argument("--n-step", type=int, default=defaults.n_step)
-    parser.add_argument("--buffer-size", type=int, default=defaults.buffer_size)
-    parser.add_argument("--learning-starts", type=int, default=defaults.learning_starts)
-    parser.add_argument(
-        "--epsilon-decay-steps", type=int, default=defaults.epsilon_decay_steps
-    )
-    parser.add_argument(
-        "--target-update-interval", type=int, default=defaults.target_update_interval
-    )
-    parser.add_argument("--eval-interval", type=int, default=defaults.eval_interval)
-    parser.add_argument("--eval-episodes", type=int, default=defaults.eval_episodes)
-    parser.add_argument(
-        "--max-episode-steps",
-        type=int,
-        default=defaults.max_episode_steps,
-        help="frame limit while training (keeps episodes affordable)",
-    )
-    parser.add_argument(
-        "--eval-max-episode-steps",
-        type=int,
-        default=defaults.eval_max_episode_steps,
-        help="frame limit while measuring; must exceed what the policy reaches",
-    )
-    parser.add_argument("--pipe-gap", type=int, default=defaults.pipe_gap)
+    add_config_arguments(parser)
+    # the two ablation switches read better as "turn it off" than as a value
     parser.add_argument("--no-double", action="store_true", help="plain DQN targets")
     parser.add_argument("--no-dueling", action="store_true", help="plain Q-head")
-    parser.add_argument("--notes", default="", help="free-text note stored in config")
     return parser
+
+
+def config_from_args(args: argparse.Namespace) -> DQNConfig:
+    """Turns parsed arguments into a config.
+
+    Every flag is named after its field, so `from_dict` does the mapping; only
+    the two inverted ablation switches need a line of their own.
+    """
+    cfg = DQNConfig.from_dict(vars(args))
+    cfg.double_dqn = not args.no_double
+    cfg.dueling = not args.no_dueling
+    return cfg
 
 
 def main(argv: Optional[List[str]] = None) -> None:
     args = build_parser().parse_args(argv)
-    cfg = DQNConfig(
-        run_name=args.run_name,
-        reward_preset=args.reward,
-        total_steps=args.total_steps,
-        seed=args.seed,
-        learning_rate=args.learning_rate,
-        batch_size=args.batch_size,
-        gamma=args.gamma,
-        n_step=args.n_step,
-        buffer_size=args.buffer_size,
-        learning_starts=args.learning_starts,
-        epsilon_decay_steps=args.epsilon_decay_steps,
-        target_update_interval=args.target_update_interval,
-        eval_interval=args.eval_interval,
-        eval_episodes=args.eval_episodes,
-        max_episode_steps=args.max_episode_steps,
-        eval_max_episode_steps=args.eval_max_episode_steps,
-        pipe_gap=args.pipe_gap,
-        double_dqn=not args.no_double,
-        dueling=not args.no_dueling,
-        notes=args.notes,
-    )
-    train(cfg, Path(args.out_dir) / args.run_name)
+    cfg = config_from_args(args)
+    train(cfg, Path(args.out_dir) / cfg.run_name)
 
 
 if __name__ == "__main__":
