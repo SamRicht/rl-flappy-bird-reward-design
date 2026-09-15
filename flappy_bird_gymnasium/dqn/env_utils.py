@@ -1,7 +1,7 @@
 """Environment construction, in one place so training and evaluation agree."""
 
 import random
-from typing import Optional
+from typing import Callable, Dict, Optional
 
 import gymnasium
 import numpy as np
@@ -32,7 +32,6 @@ def make_env(
     render_mode: Optional[str] = None,
     audio_on: bool = False,
     max_episode_steps: Optional[int] = None,
-    evaluation: bool = False,
 ) -> gymnasium.Env:
     """Builds the Flappy Bird environment described by `config`.
 
@@ -44,10 +43,10 @@ def make_env(
         render_mode: keep this `None` while training -- in "human" mode pygame
             throttles the loop to 30 FPS, which slows training down by orders
             of magnitude.
-        evaluation: use the (much higher) measuring limit instead of the
-            training limit. Measuring against the training limit censors the
-            score of every competent policy at the same value.
-        max_episode_steps: overrides both limits explicitly.
+        max_episode_steps: frame limit per episode. Defaults to the training
+            limit; pass `config.eval_max_episode_steps` when measuring, because
+            measuring against the training limit censors the score of every
+            competent policy at the same value.
     """
     env = gymnasium.make(
         "FlappyBird-v0",
@@ -58,11 +57,69 @@ def make_env(
         pipe_gap=config.pipe_gap,
         reward_config=RewardConfig.preset(config.reward_preset),
     )
-    if max_episode_steps is None:
-        max_episode_steps = (
-            config.eval_max_episode_steps if evaluation else config.max_episode_steps
-        )
-    return gymnasium.wrappers.TimeLimit(env, max_episode_steps=max_episode_steps)
+    limit = config.max_episode_steps if max_episode_steps is None else max_episode_steps
+    return gymnasium.wrappers.TimeLimit(env, max_episode_steps=limit)
+
+
+def rollout(
+    env: gymnasium.Env,
+    policy: Callable[[np.ndarray], int],
+    episodes: int,
+    seed: int,
+) -> Dict[str, list]:
+    """Plays `episodes` episodes and returns the per-episode measurements.
+
+    Every measurement in this package goes through here — the trained agents
+    and the random reference alike — so the reference is by construction
+    measured exactly like the thing it is a reference for.
+
+    Args:
+        policy: anything that maps an observation to an action, e.g.
+            `lambda obs: agent.act(obs)` or `lambda obs: rng.integers(2)`.
+        seed: episodes use `seed, seed + 1, …`. Two policies measured with the
+            same seed see identical pipe layouts, which makes the comparison
+            paired instead of a matter of who drew the easier levels.
+    """
+    measured: Dict[str, list] = {
+        "return": [],
+        "score": [],
+        "length": [],
+        "flap_rate": [],
+        "truncated": [],
+    }
+    for episode in range(episodes):
+        obs, _ = env.reset(seed=seed + episode)
+        total, length, info = 0.0, 0, {"score": 0, "flaps": 0}
+        while True:
+            obs, reward, terminated, truncated, info = env.step(policy(obs))
+            total += reward
+            length += 1
+            if terminated or truncated:
+                break
+        measured["return"].append(total)
+        measured["score"].append(info["score"])
+        measured["length"].append(length)
+        measured["flap_rate"].append(info["flaps"] / max(length, 1))
+        # only a truncation that is not also a crash means "cut short"
+        measured["truncated"].append(bool(truncated and not terminated))
+    return measured
+
+
+def summarize_rollout(measured: Dict[str, list]) -> Dict[str, float]:
+    """Condenses a `rollout` result into the metrics every caller reports."""
+    return {
+        "mean_return": float(np.mean(measured["return"])),
+        "mean_score": float(np.mean(measured["score"])),
+        "median_score": float(np.median(measured["score"])),
+        "std_score": float(np.std(measured["score"])),
+        "max_score": int(np.max(measured["score"])),
+        "min_score": int(np.min(measured["score"])),
+        "mean_length": float(np.mean(measured["length"])),
+        "mean_flap_rate": float(np.mean(measured["flap_rate"])),
+        # 1.0 means every episode hit the frame limit: the score is censored
+        # from above and no longer tells better policies apart
+        "truncation_rate": float(np.mean(measured["truncated"])),
+    }
 
 
 def set_global_seeds(seed: int) -> None:

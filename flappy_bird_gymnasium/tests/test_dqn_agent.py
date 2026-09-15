@@ -215,12 +215,12 @@ class TestEnvIntegration:
 
         train_env = make_env(config)
         train_env.reset(seed=0)
-        for step in range(1, 6):
+        for _ in range(5):
             _, _, _, truncated, _ = train_env.step(1)
         assert truncated, "training env should stop at its own limit"
         train_env.close()
 
-        eval_env = make_env(config, evaluation=True)
+        eval_env = make_env(config, max_episode_steps=config.eval_max_episode_steps)
         eval_env.reset(seed=0)
         for _ in range(6):
             _, _, terminated, truncated, _ = eval_env.step(1)

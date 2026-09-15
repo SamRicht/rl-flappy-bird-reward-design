@@ -40,7 +40,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Sequence
 
-from flappy_bird_gymnasium.dqn.config import DQNConfig
+from flappy_bird_gymnasium.dqn.config import DQNConfig, add_config_arguments
 from flappy_bird_gymnasium.dqn.train import train
 from flappy_bird_gymnasium.rl.rewards import PRESETS
 
@@ -162,22 +162,7 @@ def run_grid(
 
 def base_config(args: argparse.Namespace) -> DQNConfig:
     """The configuration shared by every run of a study."""
-    return DQNConfig(
-        total_steps=args.total_steps,
-        reward_preset=args.reward,
-        learning_rate=args.learning_rate,
-        gamma=args.gamma,
-        n_step=args.n_step,
-        batch_size=args.batch_size,
-        buffer_size=args.buffer_size,
-        epsilon_decay_steps=args.epsilon_decay_steps,
-        target_update_interval=args.target_update_interval,
-        pipe_gap=args.pipe_gap,
-        max_episode_steps=args.max_episode_steps,
-        eval_max_episode_steps=args.eval_max_episode_steps,
-        eval_interval=args.eval_interval,
-        eval_episodes=args.eval_episodes,
-    )
+    return DQNConfig.from_dict(vars(args))
 
 
 def study_seeds(args: argparse.Namespace) -> List[tuple]:
@@ -231,7 +216,6 @@ STUDIES = {
 
 
 def build_parser() -> argparse.ArgumentParser:
-    defaults = DQNConfig()
     parser = argparse.ArgumentParser(description="Run a grid of DQN trainings.")
     parser.add_argument("study", choices=sorted(STUDIES))
     parser.add_argument("--seeds", type=int, default=3, help="seeds per variant")
@@ -240,28 +224,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--runs-root", type=Path, default=None)
 
-    parser.add_argument("--total-steps", type=int, default=1_000_000)
-    parser.add_argument("--reward", default=defaults.reward_preset, choices=sorted(PRESETS))
-    parser.add_argument("--learning-rate", type=float, default=defaults.learning_rate)
-    parser.add_argument("--gamma", type=float, default=defaults.gamma)
-    parser.add_argument("--n-step", type=int, default=defaults.n_step)
-    parser.add_argument("--batch-size", type=int, default=defaults.batch_size)
-    parser.add_argument("--buffer-size", type=int, default=defaults.buffer_size)
-    parser.add_argument(
-        "--epsilon-decay-steps", type=int, default=defaults.epsilon_decay_steps
-    )
-    parser.add_argument(
-        "--target-update-interval", type=int, default=defaults.target_update_interval
-    )
-    parser.add_argument("--pipe-gap", type=int, default=defaults.pipe_gap)
-    parser.add_argument(
-        "--max-episode-steps", type=int, default=defaults.max_episode_steps
-    )
-    parser.add_argument(
-        "--eval-max-episode-steps", type=int, default=defaults.eval_max_episode_steps
-    )
-    parser.add_argument("--eval-interval", type=int, default=defaults.eval_interval)
-    parser.add_argument("--eval-episodes", type=int, default=defaults.eval_episodes)
+    # the same flags as train.py, from the same definition, so the two entry
+    # points cannot disagree about names or defaults
+    add_config_arguments(parser)
+    parser.set_defaults(total_steps=1_000_000)
 
     # study-specific
     parser.add_argument("--param", choices=sorted(SWEEPABLE), help="sweep: what to vary")

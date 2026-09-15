@@ -1,7 +1,10 @@
 """Hyperparameters for the DQN agent, in one place."""
 
-from dataclasses import asdict, dataclass, field
+import argparse
+from dataclasses import asdict, dataclass
 from typing import Optional, Tuple
+
+from flappy_bird_gymnasium.rl.rewards import PRESETS
 
 
 @dataclass
@@ -78,15 +81,70 @@ class DQNConfig:
 
     # --- bookkeeping ---
     run_name: str = "dqn"
-    notes: str = field(default="")
+    notes: str = ""
 
     def to_dict(self) -> dict:
         return asdict(self)
 
     @classmethod
     def from_dict(cls, data: dict) -> "DQNConfig":
+        """Builds a config from any dict, ignoring keys that are not fields.
+
+        Tolerating extra keys is what lets `from_dict(vars(args))` replace a
+        hand-written argument-to-field mapping.
+        """
         known = {f for f in cls.__dataclass_fields__}
         cfg = cls(**{k: v for k, v in data.items() if k in known})
         # tuples survive a JSON round-trip as lists
         cfg.hidden = tuple(cfg.hidden)
         return cfg
+
+
+def add_config_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
+    """Adds one CLI flag per tunable field, each named exactly after its field.
+
+    The naming is the point: because `--learning-rate` lands in
+    `args.learning_rate`, `DQNConfig.from_dict(vars(args))` builds the config
+    with no mapping to keep in sync. Both `train.py` and `experiments.py` call
+    this, so their flags cannot drift apart.
+    """
+    defaults = DQNConfig()
+    add = parser.add_argument
+
+    add("--total-steps", type=int, default=defaults.total_steps)
+    add("--seed", type=int, default=defaults.seed)
+    add(
+        "--reward-preset",
+        "--reward",
+        dest="reward_preset",
+        default=defaults.reward_preset,
+        choices=sorted(PRESETS),
+        help="reward scheme from flappy_bird_gymnasium.rl.rewards",
+    )
+
+    add("--learning-rate", type=float, default=defaults.learning_rate)
+    add("--batch-size", type=int, default=defaults.batch_size)
+    add("--gamma", type=float, default=defaults.gamma)
+    add("--n-step", type=int, default=defaults.n_step)
+    add("--buffer-size", type=int, default=defaults.buffer_size)
+    add("--learning-starts", type=int, default=defaults.learning_starts)
+    add("--epsilon-decay-steps", type=int, default=defaults.epsilon_decay_steps)
+    add("--target-update-interval", type=int, default=defaults.target_update_interval)
+
+    add("--pipe-gap", type=int, default=defaults.pipe_gap)
+    add(
+        "--max-episode-steps",
+        type=int,
+        default=defaults.max_episode_steps,
+        help="frame limit while training (keeps episodes affordable)",
+    )
+    add(
+        "--eval-max-episode-steps",
+        type=int,
+        default=defaults.eval_max_episode_steps,
+        help="frame limit while measuring; must exceed what the policy reaches",
+    )
+    add("--eval-interval", type=int, default=defaults.eval_interval)
+    add("--eval-episodes", type=int, default=defaults.eval_episodes)
+    add("--notes", default=defaults.notes, help="free-text note stored in config.json")
+    return parser
