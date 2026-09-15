@@ -6,13 +6,18 @@ so its arithmetic is pinned down here with a discount that makes the expected
 values easy to verify by hand.
 """
 
+import json
+from dataclasses import replace
+
 import numpy as np
 import pytest
 
 from flappy_bird_gymnasium.dqn.agent import DQNAgent
 from flappy_bird_gymnasium.dqn.config import DQNConfig
 from flappy_bird_gymnasium.dqn.env_utils import make_env
+from flappy_bird_gymnasium.dqn.experiments import ABLATIONS, SWEEPABLE, _parse_hidden
 from flappy_bird_gymnasium.dqn.replay_buffer import NStepAccumulator, ReplayBuffer
+from flappy_bird_gymnasium.dqn.train import steps_to_thresholds
 
 GAMMA = 0.5  # powers of two keep the expected returns exact in floating point
 
@@ -198,3 +203,141 @@ class TestEnvIntegration:
         _, _, terminated, truncated, _ = env.step(1)
         assert truncated and not terminated
         env.close()
+
+    def test_measuring_uses_the_higher_limit(self):
+        """Training and measuring must not share a frame limit.
+
+        Measuring against the training limit censors every competent policy at
+        the same score -- the dqn_v2 baseline reported 79 for a policy worth
+        304 pipes.
+        """
+        config = DQNConfig(max_episode_steps=5, eval_max_episode_steps=40, seed=0)
+
+        train_env = make_env(config)
+        train_env.reset(seed=0)
+        for step in range(1, 6):
+            _, _, _, truncated, _ = train_env.step(1)
+        assert truncated, "training env should stop at its own limit"
+        train_env.close()
+
+        eval_env = make_env(config, evaluation=True)
+        eval_env.reset(seed=0)
+        for _ in range(6):
+            _, _, terminated, truncated, _ = eval_env.step(1)
+            assert not truncated, "measuring env must run past the training limit"
+            if terminated:
+                break
+        eval_env.close()
+
+
+class TestSampleEfficiency:
+    """`steps_to_thresholds` is the metric that survives the frame limit."""
+
+    def test_reports_the_step_a_level_was_sustained(self):
+        # scores climb from 0 to 4; with window=2 the rolling mean reaches
+        # 1.0 once two consecutive episodes average 1.0
+        steps = [100, 200, 300, 400, 500]
+        scores = [0.0, 0.0, 2.0, 2.0, 4.0]
+        result = steps_to_thresholds(steps, scores, thresholds=(1, 3), window=2)
+        # rolling means: 0.0 (@200), 1.0 (@300), 2.0 (@400), 3.0 (@500)
+        assert result["steps_to_1"] == 300
+        assert result["steps_to_3"] == 500
+
+    def test_unreached_levels_are_none_not_zero(self):
+        """A level that was never reached must be absent, not a small number."""
+        result = steps_to_thresholds([1, 2, 3, 4], [0.0, 0.0, 0.0, 0.0], (5,), window=2)
+        assert result["steps_to_5"] is None
+
+    def test_too_few_episodes_yields_no_claims(self):
+        result = steps_to_thresholds([1], [99.0], thresholds=(1,), window=20)
+        assert result["steps_to_1"] is None
+
+    def test_a_single_lucky_episode_does_not_count(self):
+        """The rolling mean is what makes the metric robust."""
+        steps = [100, 200, 300, 400]
+        scores = [0.0, 50.0, 0.0, 0.0]  # one outlier
+        result = steps_to_thresholds(steps, scores, thresholds=(40,), window=4)
+        assert result["steps_to_40"] is None
+
+
+class TestAblations:
+    """Every ablation variant must produce a config the agent accepts."""
+
+    @pytest.mark.parametrize("variant", sorted(ABLATIONS))
+    def test_variant_builds_a_working_agent(self, variant):
+        config = replace(
+            DQNConfig(seed=0, buffer_size=200, learning_starts=16, batch_size=8),
+            **ABLATIONS[variant],
+        )
+        agent = DQNAgent(obs_dim=3, n_actions=2, config=config)
+        for i in range(40):
+            agent.remember(_obs(i), i % 2, 0.1, _obs(i + 1), i % 10 == 9)
+        metrics = agent.learn()
+        assert metrics is not None
+        assert np.isfinite(metrics["loss"])
+
+    def test_vanilla_switches_everything_off(self):
+        assert ABLATIONS["vanilla"] == {
+            "double_dqn": False,
+            "dueling": False,
+            "n_step": 1,
+        }
+
+
+class TestReproducibility:
+    """A seed has to mean something, or no seed comparison is worth anything."""
+
+    def _agent(self, seed: int) -> DQNAgent:
+        return DQNAgent(
+            obs_dim=3,
+            n_actions=2,
+            config=DQNConfig(seed=seed, buffer_size=100, batch_size=4, learning_starts=8),
+        )
+
+    def test_same_seed_gives_the_same_exploration(self):
+        first, second = self._agent(7), self._agent(7)
+        actions_a = [first.act(_obs(i / 10), epsilon=0.5) for i in range(40)]
+        actions_b = [second.act(_obs(i / 10), epsilon=0.5) for i in range(40)]
+        assert actions_a == actions_b
+
+    def test_different_seeds_diverge(self):
+        first, second = self._agent(7), self._agent(8)
+        actions_a = [first.act(_obs(i / 10), epsilon=0.5) for i in range(40)]
+        actions_b = [second.act(_obs(i / 10), epsilon=0.5) for i in range(40)]
+        assert actions_a != actions_b
+
+    def test_same_seed_gives_the_same_replay_batch(self):
+        first, second = self._agent(3), self._agent(3)
+        for agent in (first, second):
+            for i in range(30):
+                agent.remember(_obs(i), i % 2, float(i), _obs(i + 1), i % 7 == 6)
+        batch_a = first.buffer.sample(4)
+        batch_b = second.buffer.sample(4)
+        for array_a, array_b in zip(batch_a, batch_b):
+            np.testing.assert_array_equal(array_a, array_b)
+
+
+class TestSweepParsing:
+    @pytest.mark.parametrize(
+        "text,expected",
+        [("256x256", (256, 256)), ("64,64", (64, 64)), ("512", (512,))],
+    )
+    def test_hidden_sizes_parse(self, text, expected):
+        assert _parse_hidden(text) == expected
+
+    def test_hidden_is_sweepable(self):
+        """Network size must be varyable like any other hyperparameter."""
+        assert "hidden" in SWEEPABLE
+        config = replace(DQNConfig(), hidden=SWEEPABLE["hidden"]("128x64"))
+        agent = DQNAgent(obs_dim=3, n_actions=2, config=config)
+        assert agent.act(_obs(0.5)) in (0, 1)
+
+
+class TestConfigRoundTrip:
+    def test_new_fields_survive_json(self):
+        config = DQNConfig(n_step=5, eval_max_episode_steps=12_345, hidden=(64, 32))
+        restored = DQNConfig.from_dict(json.loads(json.dumps(config.to_dict())))
+        assert restored.n_step == 5
+        assert restored.eval_max_episode_steps == 12_345
+        # tuples come back from JSON as lists and must be restored as tuples
+        assert restored.hidden == (64, 32)

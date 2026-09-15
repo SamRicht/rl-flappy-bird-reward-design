@@ -117,13 +117,128 @@ def plot_runs(run_dirs: List[Path], window: int = 50, out: Optional[Path] = None
         plt.show()
 
 
+def _curve_on_grid(
+    run_dir: Path, grid: np.ndarray, window: int, column: str
+) -> Optional[np.ndarray]:
+    """Rolling mean of one run's `column`, resampled onto a shared step grid.
+
+    Runs finish different numbers of episodes at different steps, so their
+    curves cannot be averaged elementwise. Interpolating each onto the same
+    grid first is what makes a mean across seeds meaningful.
+    """
+    train = _read_csv(run_dir / "train.csv")
+    if column not in train or len(train[column]) < window:
+        return None
+    smoothed = _moving_average(train[column], window)
+    steps = train["step"][window - 1 :]
+    return np.interp(grid, steps, smoothed, left=np.nan, right=np.nan)
+
+
+def plot_study(
+    study_root: Path,
+    window: int = 50,
+    out: Optional[Path] = None,
+    column: str = "score",
+) -> None:
+    """Draws one band per variant: mean across seeds, shaded by one std.
+
+    This is the figure a comparison is argued from. The band is the point --
+    two variants whose bands overlap for their whole length have not been
+    shown to differ, however far apart their means happen to end up.
+    """
+    variants: dict = {}
+    for config_path in sorted(study_root.glob("*/config.json")):
+        run_dir = config_path.parent
+        variants.setdefault(run_dir.name.rsplit("_seed", 1)[0], []).append(run_dir)
+    if not variants:
+        raise SystemExit(f"keine Laeufe unter {study_root}")
+
+    # a shared grid ending at the shortest run, so no curve is extrapolated
+    last_steps = []
+    for run_dirs in variants.values():
+        for run_dir in run_dirs:
+            train = _read_csv(run_dir / "train.csv")
+            if len(train.get("step", [])):
+                last_steps.append(train["step"][-1])
+    grid = np.linspace(0, min(last_steps), 300)
+
+    fig, (ax_curve, ax_final) = plt.subplots(1, 2, figsize=(13, 5.2))
+    colors = plt.rcParams["axes.prop_cycle"].by_key()["color"]
+
+    finals, labels = [], []
+    for index, (variant, run_dirs) in enumerate(sorted(variants.items())):
+        curves = [_curve_on_grid(d, grid, window, column) for d in run_dirs]
+        curves = [c for c in curves if c is not None]
+        if not curves:
+            continue
+        stacked = np.vstack(curves)
+        # grid points before the first episode of a run are NaN for that run;
+        # a std needs at least two of them, so compute it only where it exists
+        counts = np.sum(~np.isnan(stacked), axis=0)
+        mean = np.full(stacked.shape[1], np.nan)
+        std = np.zeros(stacked.shape[1])
+        present, usable = counts > 0, counts > 1
+        if present.any():
+            mean[present] = np.nanmean(stacked[:, present], axis=0)
+        if usable.any():
+            std[usable] = np.nanstd(stacked[:, usable], axis=0, ddof=1)
+        color = colors[index % len(colors)]
+
+        ax_curve.plot(grid, mean, color=color, label=f"{variant} (n={len(curves)})")
+        ax_curve.fill_between(grid, mean - std, mean + std, color=color, alpha=0.18)
+
+        finals.append((np.nanmean(mean[-20:]), np.nanmean(std[-20:])))
+        labels.append(variant)
+
+    ax_curve.set(
+        title=f"Trainings-{column} je Variante (gleitender Mittelwert ueber {window} Episoden)",
+        xlabel="Umgebungsschritte",
+        ylabel=column,
+    )
+    ax_curve.grid(alpha=0.3)
+    ax_curve.legend()
+
+    positions = np.arange(len(labels))
+    ax_final.bar(
+        positions,
+        [f[0] for f in finals],
+        yerr=[f[1] for f in finals],
+        capsize=5,
+        color=[colors[i % len(colors)] for i in range(len(labels))],
+    )
+    ax_final.set_xticks(positions)
+    ax_final.set_xticklabels(labels, rotation=20, ha="right")
+    ax_final.set(title="Endniveau (letzte 20 Gitterpunkte)", ylabel=column)
+    ax_final.grid(alpha=0.3, axis="y")
+
+    fig.tight_layout()
+    if out is not None:
+        fig.savefig(out, dpi=150)
+        print(f"gespeichert: {out}")
+    else:
+        plt.show()
+
+
 def main(argv: Optional[List[str]] = None) -> None:
     parser = argparse.ArgumentParser(description="Plot DQN learning curves.")
     parser.add_argument("runs", nargs="+", type=Path, help="run directories")
     parser.add_argument("--window", type=int, default=50, help="moving-average window")
     parser.add_argument("--out", type=Path, default=None, help="save instead of show")
+    parser.add_argument(
+        "--study",
+        action="store_true",
+        help="treat the single argument as a study root and band its seeds",
+    )
+    parser.add_argument(
+        "--column",
+        default="score",
+        help="study mode: which train.csv column to band (score, length, ...)",
+    )
     args = parser.parse_args(argv)
-    plot_runs(args.runs, window=args.window, out=args.out)
+    if args.study:
+        plot_study(args.runs[0], window=args.window, out=args.out, column=args.column)
+    else:
+        plot_runs(args.runs, window=args.window, out=args.out)
 
 
 if __name__ == "__main__":

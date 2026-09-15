@@ -19,10 +19,17 @@ class DQNConfig:
     # Name of a preset in flappy_bird_gymnasium.rl.rewards.PRESETS. "legacy"
     # reproduces the upstream reward exactly and is the baseline of the study.
     reward_preset: str = "legacy"
-    # Step limit per episode. Needed because a competent policy would otherwise
-    # play forever and a single episode could eat the whole training budget.
-    # Reaching it is a truncation and is bootstrapped, never treated as death.
+    # Step limit per episode *while training*. Needed because a competent
+    # policy would otherwise play forever and a single episode could eat the
+    # whole training budget. Reaching it is a truncation and is bootstrapped,
+    # never treated as death.
     max_episode_steps: int = 3_000
+    # Step limit *while measuring*, deliberately far higher. The dqn_v2 run
+    # showed why they must differ: at 3_000 frames every evaluation episode ran
+    # into the limit and reported a score of 79, while the same policy scores
+    # 304 when allowed to play on. A censored score collapses every good
+    # variant onto the same number, which would make a comparison worthless.
+    eval_max_episode_steps: int = 20_000
 
     # --- network ---
     hidden: Tuple[int, ...] = (256, 256)
