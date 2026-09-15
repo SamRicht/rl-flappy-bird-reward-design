@@ -30,6 +30,15 @@ class DQNAgent:
             device or ("cuda" if torch.cuda.is_available() else "cpu")
         )
 
+        # Seed the global Torch RNG here, not only in the training script: the
+        # weights are drawn from it, so without this an agent built with a
+        # given seed still starts from different weights depending on what ran
+        # before it in the same process. A seed study is worthless if "seed 3"
+        # does not reproduce.
+        torch.manual_seed(self.cfg.seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(self.cfg.seed)
+
         self.q_net = build_q_network(
             obs_dim, n_actions, self.cfg.hidden, self.cfg.dueling
         ).to(self.device)

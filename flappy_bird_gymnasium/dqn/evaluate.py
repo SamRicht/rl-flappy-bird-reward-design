@@ -23,11 +23,18 @@ def play(
     max_episode_steps: Optional[int] = None,
     seed: int = 0,
     epsilon: float = 0.0,
+    verbose: bool = True,
 ) -> dict:
-    """Runs the (near-)greedy policy and prints per-episode results.
+    """Runs the (near-)greedy policy and reports per-episode results.
 
     The environment is rebuilt from the config stored in the checkpoint, so the
-    agent is always measured under the reward scheme it was trained on.
+    agent is always measured under the reward scheme it was trained on, and by
+    default against the *measuring* frame limit rather than the training one.
+
+    Args:
+        seed: episodes use `seed, seed+1, ...`, so two checkpoints measured with
+            the same seed see identical pipe layouts and the comparison is
+            paired rather than confounded by luck of the draw.
     """
     agent = DQNAgent.load(checkpoint)
     agent.q_net.eval()
@@ -37,13 +44,17 @@ def play(
         render_mode="human" if render else None,
         audio_on=audio and render,
         max_episode_steps=max_episode_steps,
+        evaluation=True,
     )
-    print(
-        f"reward preset: {agent.cfg.reward_preset} | "
-        f"n_step: {agent.cfg.n_step} | trained for {agent.train_steps} updates"
-    )
+    limit = max_episode_steps or agent.cfg.eval_max_episode_steps
+    if verbose:
+        print(
+            f"reward preset: {agent.cfg.reward_preset} | "
+            f"n_step: {agent.cfg.n_step} | seed {agent.cfg.seed} | "
+            f"frame limit {limit}"
+        )
 
-    returns, scores, lengths, flap_rates = [], [], [], []
+    returns, scores, lengths, flap_rates, truncations = [], [], [], [], []
     for i in range(episodes):
         obs, _ = env.reset(seed=seed + i)
         total, length, info = 0.0, 0, {"score": 0, "flaps": 0}
@@ -58,30 +69,43 @@ def play(
         scores.append(info["score"])
         lengths.append(length)
         flap_rates.append(info["flaps"] / max(length, 1))
-        print(
-            f"episode {i + 1:>3}: score {info['score']:>4} | "
-            f"return {total:8.2f} | frames {length:>5} | "
-            f"flap rate {flap_rates[-1]:.2f}"
-        )
+        truncations.append(bool(truncated and not terminated))
+        if verbose:
+            print(
+                f"episode {i + 1:>3}: score {info['score']:>4} | "
+                f"return {total:8.2f} | frames {length:>5} | "
+                f"flap rate {flap_rates[-1]:.2f}"
+                + ("  (Limit erreicht)" if truncations[-1] else "")
+            )
     env.close()
 
     summary = {
         "episodes": episodes,
         "mean_score": float(np.mean(scores)),
         "median_score": float(np.median(scores)),
+        "std_score": float(np.std(scores)),
         "max_score": int(np.max(scores)),
         "min_score": int(np.min(scores)),
         "mean_return": float(np.mean(returns)),
         "mean_length": float(np.mean(lengths)),
         "mean_flap_rate": float(np.mean(flap_rates)),
+        "truncation_rate": float(np.mean(truncations)),
+        "frame_limit": int(limit),
     }
-    print(
-        f"\n{episodes} episodes | mean score {summary['mean_score']:.2f} "
-        f"(median {summary['median_score']:.0f}, "
-        f"min {summary['min_score']}, max {summary['max_score']}) | "
-        f"mean return {summary['mean_return']:.2f} | "
-        f"flap rate {summary['mean_flap_rate']:.2f}"
-    )
+    if verbose:
+        print(
+            f"\n{episodes} episodes | mean score {summary['mean_score']:.2f} "
+            f"± {summary['std_score']:.2f} "
+            f"(median {summary['median_score']:.0f}, "
+            f"min {summary['min_score']}, max {summary['max_score']}) | "
+            f"flap rate {summary['mean_flap_rate']:.2f}"
+        )
+        if summary["truncation_rate"] > 0:
+            print(
+                f"WARNUNG: {summary['truncation_rate']:.0%} der Episoden liefen ins "
+                f"Frame-Limit von {limit}. Der Score ist nach oben zensiert -- "
+                f"mit --max-episode-steps hoeher messen."
+            )
     return summary
 
 
