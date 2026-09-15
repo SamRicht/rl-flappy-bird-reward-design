@@ -2,7 +2,7 @@
 
 Vollständige Dokumentation der DQN-Arbeit: was vorhanden war, was gebaut wurde,
 welche Experimente gelaufen sind, was sie ergeben haben, und welche Läufe
-vorbereitet sind. Stand: 15.09.2026, vor dem Start der Ablationsstudie.
+vorbereitet sind. Stand: 15.09.2026, nach der Ablationsstudie (Abschnitt 8.5).
 
 Das Dokument ist als Grundlage für die Präsentation gedacht. Abschnitt 11
 (*Was sich aus welchem Ergebnis schließen lässt*) formuliert die Hypothesen
@@ -45,6 +45,12 @@ Wichtiger als die Zahl ist die Methodik, die dabei entstanden ist: Studien über
 mehrere Seeds, gepaarte Auswertung, zensurfreie Metriken und eine Zufalls-Referenz.
 Ohne die sind Vergleiche zwischen Lernverfahren nicht belastbar — was sich an
 einem eigenen Fehlschluss gezeigt hat (Abschnitt 9).
+
+Die Ablationsstudie (25 Läufe, Abschnitt 8.5) zeigt: Die drei Erweiterungen
+zusammen verneunfachen den Score gegenüber Lehrbuch-DQN (164 gegen 18).
+Den größten und stabilsten Einzelbeitrag liefern **n-step Returns** — entgegen
+der eigenen Vorhersage. Double DQN hilft beim besten Checkpoint, der
+Dueling-Kopf bringt messbar nichts.
 
 **38 Tests**, alle grün.
 
@@ -452,7 +458,112 @@ Versuch lief über 200.000 Schritte mit Puffer 100.000, die Replikation über
 der Ablationsstudie mit. Die Antwort kommt dann mit Fehlerbalken aus dem
 Hauptexperiment.
 
-### 8.4 Durchsatz
+### 8.5 Ablationsstudie
+
+5 Varianten × 5 Seeds, je 1.000.000 Schritte, Reward `legacy`, sonst die
+Konfiguration aus Abschnitt 7. Endmessung mit `summarize.py`: 30 gepaarte
+Episoden pro Lauf (Evaluations-Seed 90.000), 20.000-Frame-Limit.
+Grafik: `runs/study_ablation/ablation_greedy.png`.
+
+#### Drei Messungen, weil eine allein täuschen kann
+
+| Variante | bester Checkpoint | letzter Checkpoint | Greedy-Verlauf ab 550k |
+| --- | --- | --- | --- |
+| `full` | **163,8 ± 48,4** (103 – 209) | 71,0 ± 62,0 | **38,1** |
+| `no_dueling` | 217,7 ± 176,0 (82 – 517\*) | 78,6 ± 43,9 | 38,5 |
+| `no_double` | 64,3 ± 30,0 (18 – 102) | 87,2 ± 102,0 | 30,4 |
+| `no_nstep` | 56,4 ± 64,8 (6 – 160) | 48,4 ± 64,1 | 15,2 |
+| `vanilla` | 17,9 ± 13,8 (5 – 35) | 12,7 ± 13,4 | 9,7 |
+| Zufall | 0,0 | 0,0 | — |
+
+Mittelwert ± Standardabweichung **zwischen den Seeds**, in Klammern schlechtester
+bis bester Seed. \* `no_dueling_seed3` lief in 93 % der Episoden ins
+20.000-Frame-Limit; sein Wert ist eine Untergrenze. Ohne ihn: 143,0 ± 63,8.
+
+- **Bester Checkpoint** (`best.pt`): was eine Variante im besten Moment kann.
+- **Letzter Checkpoint** (`latest.pt`): was man bekommt, wenn man bei 1M einfach
+  stoppt. Wegen der Oszillation (8.2) stark verrauscht.
+- **Greedy-Verlauf**: Mittel der zehn Zwischenmessungen ab 550.000 Schritten je
+  Seed, aus `eval.csv`. Hängt von keiner Checkpoint-Wahl ab, ist aber beim
+  Trainingslimit (≈ 79 Röhren) nach oben gedeckelt.
+
+#### Signifikanz: `full` gegen jede Variante
+
+Exakter Permutationstest (Mann-Whitney) über die 5 Seed-Werte je Variante.
+Bei n = 5 gegen 5 ist **p = 0,008 der kleinstmögliche Wert** — er bedeutet:
+jeder `full`-Seed liegt über jedem Seed der anderen Variante.
+
+| Vergleich | bester Checkpoint | letzter Checkpoint | Greedy-Verlauf |
+| --- | --- | --- | --- |
+| gegen `vanilla` | **0,008** | **0,032** | **0,008** |
+| gegen `no_nstep` | **0,032** | 0,31 | **0,008** |
+| gegen `no_double` | **0,008** | 1,0 | 0,22 |
+| gegen `no_dueling` | 1,0 | 0,69 | 1,0 |
+
+Vier Vergleiche gegen dieselbe Referenz: Nach Holm-Korrektur hält beim besten
+Checkpoint `no_nstep` (0,032) die 5-%-Schwelle nicht mehr. Deshalb zählt ein
+Befund hier nur, wenn er in mehreren Messungen auftaucht.
+
+#### Was die Studie zeigt
+
+**1. Die Erweiterungen zusammen lohnen sich — eindeutig.** `full` schlägt
+`vanilla` in allen drei Messungen, beim besten Checkpoint um den Faktor 9.
+Das ist das robusteste Ergebnis der Studie.
+
+**2. n-step ist der wichtigste Einzelbaustein.** Ohne n-step fällt der
+Greedy-Verlauf von 38 auf 15. Alle fünf `full`-Seeds liegen über allen fünf
+`no_nstep`-Seeds. Nur 3 von 5 `no_nstep`-Seeds halten überhaupt einmal
+Score 10 im Training, bei `vanilla` 1 von 5, bei allen anderen 5 von 5. Plausible
+Erklärung: Die +1 für eine Röhre liegt ~50 Frames in der Zukunft (8.1).
+Mit n = 3 braucht sie ein Drittel so viele Bellman-Backups, bis sie die
+entscheidenden Aktionen erreicht.
+
+**3. Double DQN hilft der Spitzenleistung, nicht dem Durchschnitt.** Beim besten
+Checkpoint liegt jeder `full`-Seed über jedem `no_double`-Seed (164 gegen 64).
+Im Verlauf und am Ende verschwindet der Unterschied. Lesart: Double DQN hebt, wie
+gut die Policy in ihren besten Phasen wird, verhindert aber nicht, dass sie
+danach wieder einbricht. Das ist ein Hinweis, kein Beleg.
+
+**4. Der Dueling-Kopf bringt nichts Messbares.** In keiner Messung ein
+Unterschied (p ≥ 0,69); `no_dueling` liegt sogar leicht vorn. Da das Netz ohne
+Dueling-Kopf kleiner ist, spricht in dieser Umgebung nichts für ihn.
+
+**5. Die Erweiterungen machen nicht schneller, sondern besser.** Bis Score 1
+brauchen alle Varianten 245k – 310k Schritte (Median), bis Score 5 rund 430k –
+470k. Die Unterschiede entstehen erst danach — im Niveau und in der
+Stabilität. Bei `vanilla` fallen 21 von 50 späten Zwischenmessungen unter
+Score 5, bei `full` eine.
+
+**6. Der Trainings-Score verdeckt das.** In der Trainingskurve
+(`ablation.png`) liegen `full`, `no_double` und `no_dueling` gleichauf. Die
+Restexploration (ε = 0,01) deckelt alle bei ~8 Röhren (8.2). Unterschiede
+zwischen den guten Varianten sieht man nur in Greedy-Messungen.
+
+**7. Das Verhalten ändert sich mit.** Flap-Rate der Greedy-Policy: `full` 0,060,
+`no_nstep` 0,080, `vanilla` 0,093, Zufall 0,367. Bessere Varianten flattern
+sparsamer.
+
+#### Abgleich mit den Hypothesen aus 11.1
+
+| Hypothese vor den Läufen | Ergebnis |
+| --- | --- |
+| `full` schlägt `vanilla` deutlich | **bestätigt**, in allen drei Messungen |
+| `no_double` fällt ab | **teilweise** — nur beim besten Checkpoint |
+| `no_dueling` fällt ab | **nicht bestätigt** — kein Unterschied |
+| `no_nstep` ist nicht schlechter | **widerlegt** — n-step ist der größte Einzelbeitrag |
+| `no_nstep` ist besser als `full` | **widerlegt** |
+| Alle Fehlerbalken überlappen | nein, außer bei Dueling |
+
+#### Konsequenzen
+
+- Standardkonfiguration bleibt Double + n-step 3. Dueling kann für den Vergleich
+  mit den anderen Verfahren bleiben (es schadet nicht), ist aber kein Argument.
+- Für den Vergleich mit PPO, Q-Learning und CNN nicht nur den besten Checkpoint
+  berichten: Der letzte Checkpoint schwankt bei `full` zwischen 17 und 163.
+- `no_dueling_seed3` zeigt, dass 20.000 Frames für die besten Policies schon
+  wieder zensieren. Für Endzahlen das Limit anheben.
+
+### 8.6 Durchsatz
 
 | Aufbau | pro Lauf | gesamt |
 | --- | --- | --- |
@@ -529,6 +640,20 @@ Alle drei waren zu pessimistisch.
 *Folge:* RL-Lernkurven sind über weite Strecken flach und springen dann. Eine
 Momentaufnahme sagt fast nichts, und der Vergleich zweier Läufe ist nur bei
 identischem Explorationsstand gültig. Urteile gehören ans Ende eines Laufs.
+
+### 9.7 Die Replikation maß die falsche Phase
+
+Die n-step-Replikation (8.3) lief über 300.000 Schritte und legte nahe, n-step
+bringe nichts. Die Hypothese in 11.1 übernahm das. In der Ablationsstudie über
+1.000.000 Schritte ist n-step der größte Einzelbeitrag (8.5). Die Replikation war
+nicht falsch gemessen, sie maß nur die Frühphase. Dort unterscheiden sich die
+Varianten kaum; die Unterschiede entstehen erst ab rund 500.000 Schritten.
+
+Dass die Hypothese vorab aufgeschrieben war, macht diesen Fehler sichtbar,
+statt ihn nachträglich wegzuerklären.
+
+*Folge:* Kurze Pilotläufe taugen, um Fehler zu finden, nicht, um Varianten
+auszusortieren. Vergleiche laufen über das volle Budget.
 
 ---
 
@@ -629,15 +754,15 @@ Fünf Varianten: `full`, `no_double`, `no_dueling`, `no_nstep`, `vanilla`.
 
 ## 12. Vorbereitete Läufe
 
-### 12.1 Ablationsstudie — startbereit
+### 12.1 Ablationsstudie — gelaufen, Ergebnisse in 8.5
 
 ```powershell
 python -m flappy_bird_gymnasium.dqn.experiments ablation `
-    --seeds 5 --total-steps 1000000 --eval-interval 50000 --eval-episodes 10
+    --seeds 5 --total-steps 1000000 --eval-interval 50000 --eval-episodes 10 --workers 13
 ```
 
-25 Läufe (5 Varianten × 5 Seeds), je 1.000.000 Schritte, Reward `legacy`, 12
-Prozesse parallel. **Rund vier Stunden.** Platzbedarf etwa 57 MB.
+25 Läufe (5 Varianten × 5 Seeds), je 1.000.000 Schritte, Reward `legacy`.
+Platzbedarf etwa 57 MB.
 
 Auswertung danach:
 
@@ -725,6 +850,15 @@ python -m flappy_bird_gymnasium.dqn.experiments sweep --param n_step --values 1 
     --seeds 3 --total-steps 300000 --epsilon-decay-steps 150000
 python -m flappy_bird_gymnasium.dqn.summarize runs/study_sweep --episodes 30
 ```
+
+### Studien erneut starten
+
+`experiments.py` überspringt Läufe, die bereits eine `summary.json` und eine
+identische `config.json` haben; alle anderen beginnen von vorn. Damit lässt sich
+eine Studie mit demselben Befehl ergänzen. Mitten in einem Lauf fortzusetzen ist
+bewusst nicht vorgesehen: Checkpoints enthalten weder Replay Buffer noch
+RNG-Zustand, ein fortgesetzter Lauf wäre nicht mit einem durchgelaufenen
+vergleichbar.
 
 ### Tests
 

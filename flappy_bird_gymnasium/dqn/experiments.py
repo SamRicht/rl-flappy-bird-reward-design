@@ -121,6 +121,27 @@ def build_specs(
     return specs
 
 
+def completed_summary(spec: Dict[str, object]) -> Optional[Dict[str, object]]:
+    """The summary of a run that already finished with this exact config.
+
+    Lets an interrupted study be restarted with the same command: finished runs
+    are kept, unfinished ones start over from scratch. Resuming a run midway is
+    deliberately not supported -- checkpoints hold no replay buffer and no RNG
+    state, so a resumed run would not match one that ran through.
+    """
+    run_dir = Path(spec["run_dir"])
+    summary_path, config_path = run_dir / "summary.json", run_dir / "config.json"
+    if not (summary_path.exists() and config_path.exists()):
+        return None
+    stored = json.loads(config_path.read_text(encoding="utf-8"))
+    if stored != json.loads(json.dumps(spec["config"])):
+        return None
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    summary["label"] = spec["label"]
+    summary["variant"] = spec["variant"]
+    return summary
+
+
 def run_grid(
     specs: List[Dict[str, object]],
     runs_root: Path,
@@ -128,19 +149,36 @@ def run_grid(
 ) -> List[Dict[str, object]]:
     """Executes the job specifications in a process pool.
 
+    Runs that already finished with the same config are skipped, see
+    `completed_summary`.
+
     Returns:
         The summaries of all runs, in completion order.
     """
     runs_root.mkdir(parents=True, exist_ok=True)
     (runs_root / "study.json").write_text(json.dumps(specs, indent=2), encoding="utf-8")
 
-    print(f"{len(specs)} Laeufe auf {workers} Prozessen -> {runs_root}", flush=True)
-    started = time.time()
     summaries: List[Dict[str, object]] = []
+    pending = []
+    for spec in specs:
+        summary = completed_summary(spec)
+        if summary is None:
+            pending.append(spec)
+        else:
+            summaries.append(summary)
+    if summaries:
+        print(
+            f"{len(summaries)} Laeufe bereits fertig, uebersprungen: "
+            + ", ".join(s["label"] for s in summaries),
+            flush=True,
+        )
+
+    print(f"{len(pending)} Laeufe auf {workers} Prozessen -> {runs_root}", flush=True)
+    started = time.time()
 
     with ProcessPoolExecutor(max_workers=workers) as pool:
-        futures = {pool.submit(_run_one, spec): spec for spec in specs}
-        for done, future in enumerate(as_completed(futures), start=1):
+        futures = {pool.submit(_run_one, spec): spec for spec in pending}
+        for done, future in enumerate(as_completed(futures), start=len(summaries) + 1):
             summary = future.result()
             summaries.append(summary)
             censored = (
