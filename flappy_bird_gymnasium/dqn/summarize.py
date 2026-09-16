@@ -248,6 +248,30 @@ def aggregate(results: List[Dict]) -> List[Dict]:
     return rows
 
 
+def output_paths(
+    study_root: Path, checkpoint: str, max_episode_steps: Optional[int] = None
+) -> tuple:
+    """Where the two result files go — one pair per measurement.
+
+    The file name carries whatever makes a measurement different, so none of
+    them overwrites another. Two things do:
+
+    * **The checkpoint.** Best and last answer different questions and can
+      disagree sharply — in the ablation study Double DQN mattered for one and
+      not the other.
+    * **The frame limit.** A raised limit is how a censored score gets its real
+      value; keeping both files makes the censoring visible instead of
+      replacing one number with another.
+    """
+    suffix = "" if checkpoint == "best.pt" else f"_{Path(checkpoint).stem}"
+    if max_episode_steps is not None:
+        suffix += f"_limit{max_episode_steps}"
+    return (
+        study_root / f"evaluations{suffix}.csv",
+        study_root / f"aggregate{suffix}.csv",
+    )
+
+
 def write_csv(path: Path, rows: List[Dict], fields: List[str]) -> None:
     with open(path, "w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=fields, extrasaction="ignore")
@@ -262,7 +286,7 @@ def print_table(rows: List[Dict]) -> None:
     # characters like the plus-minus sign into replacement glyphs
     header = (
         f"{'Variante':<16}{'Seeds':>6}{'Score':>18}{'Spanne':>16}"
-        f"{'bis 10':>10}{'bis 25':>10}{'Trunc':>8}"
+        f"{'bis 10':>10}{'bis 25':>10}{'Flap':>8}{'Trunc':>8}"
     )
     print("\n" + header)
     print("-" * len(header))
@@ -273,7 +297,8 @@ def print_table(rows: List[Dict]) -> None:
         score = f"{row['score_mean']:.1f} +/- {row['score_std']:.1f}"
         print(
             f"{row['variant']:<16}{row['seeds']:>6}{score:>18}"
-            f"{span:>16}{to10:>10}{to25:>10}{row['truncation_rate']:>8.2f}"
+            f"{span:>16}{to10:>10}{to25:>10}"
+            f"{row['flap_rate_mean']:>8.3f}{row['truncation_rate']:>8.2f}"
         )
     print(
         "\nScore = mittlere passierte Roehren, gemittelt ueber die Seeds;\n"
@@ -283,6 +308,7 @@ def print_table(rows: List[Dict]) -> None:
         "bis 10 / bis 25 = Umgebungsschritte, bis der gleitende Score das Niveau\n"
         "        hielt (Median ueber die Seeds). Nicht zensierbar, daher auch\n"
         "        zwischen Algorithmen vergleichbar.\n"
+        "Flap   = Anteil der Frames mit Flattern (Verhalten, nicht Leistung).\n"
         "Trunc  = Anteil Episoden im Frame-Limit. Groesser 0 heisst: Score nach\n"
         "        oben zensiert, mit hoeherem --max-episode-steps nachmessen."
     )
@@ -336,14 +362,14 @@ def main(argv: Optional[List[str]] = None) -> None:
             )
         )
 
-    write_csv(args.study_root / "evaluations.csv", results, PER_RUN_FIELDS)
-    write_csv(args.study_root / "aggregate.csv", rows, AGGREGATE_FIELDS)
+    per_run_path, aggregate_path = output_paths(
+        args.study_root, args.checkpoint, args.max_episode_steps
+    )
+    write_csv(per_run_path, results, PER_RUN_FIELDS)
+    write_csv(aggregate_path, rows, AGGREGATE_FIELDS)
 
     print_table(rows)
-    print(
-        f"\ngeschrieben: {args.study_root / 'evaluations.csv'} (pro Lauf), "
-        f"{args.study_root / 'aggregate.csv'} (pro Variante)"
-    )
+    print(f"\ngeschrieben: {per_run_path} (pro Lauf), {aggregate_path} (pro Variante)")
 
 
 if __name__ == "__main__":
