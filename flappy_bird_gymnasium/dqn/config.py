@@ -1,8 +1,8 @@
 """Hyperparameters for the DQN agent, in one place."""
 
 import argparse
-from dataclasses import asdict, dataclass
-from typing import Optional, Tuple
+from dataclasses import asdict, dataclass, field
+from typing import Dict, Optional, Tuple
 
 from flappy_bird_gymnasium.rl.rewards import PRESETS
 
@@ -22,6 +22,10 @@ class DQNConfig:
     # Name of a preset in flappy_bird_gymnasium.rl.rewards.PRESETS. "legacy"
     # reproduces the upstream reward exactly and is the baseline of the study.
     reward_preset: str = "legacy"
+    # Single reward terms overridden on top of the preset, e.g.
+    # {"ceiling": 0.0}. The reward study compares whole schemes, which differ
+    # in several terms at once; this is what isolates one term of one scheme.
+    reward_overrides: Dict[str, float] = field(default_factory=dict)
     # Step limit per episode *while training*. Needed because a competent
     # policy would otherwise play forever and a single episode could eat the
     # whole training budget. Reaching it is a truncation and is bootstrapped,

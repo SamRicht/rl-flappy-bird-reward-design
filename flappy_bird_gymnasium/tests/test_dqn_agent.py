@@ -14,8 +14,22 @@ import pytest
 
 from flappy_bird_gymnasium.dqn.agent import DQNAgent
 from flappy_bird_gymnasium.dqn.config import DQNConfig
-from flappy_bird_gymnasium.dqn.env_utils import make_env
-from flappy_bird_gymnasium.dqn.experiments import ABLATIONS, SWEEPABLE, _parse_hidden
+from flappy_bird_gymnasium.dqn.env_utils import make_env, reward_config_for
+from flappy_bird_gymnasium.dqn.experiments import (
+    ABLATIONS,
+    SWEEPABLE,
+    _parse_hidden,
+    build_parser,
+    build_specs,
+    PARAM_GRID,
+    completed_summary,
+    study_params,
+    study_reward,
+    study_reward_terms,
+)
+from flappy_bird_gymnasium.dqn.significance import permutation_p, read_runs
+from flappy_bird_gymnasium.dqn.summarize import output_paths
+from flappy_bird_gymnasium.rl.rewards import PRESETS
 from flappy_bird_gymnasium.dqn.replay_buffer import NStepAccumulator, ReplayBuffer
 from flappy_bird_gymnasium.dqn.train import steps_to_thresholds
 
@@ -175,7 +189,7 @@ class TestDQNAgent:
 
 
 class TestEnvIntegration:
-    @pytest.mark.parametrize("preset", ["legacy", "sparse", "shaped", "energy"])
+    @pytest.mark.parametrize("preset", sorted(PRESETS))
     def test_agent_runs_an_episode_under_every_reward_scheme(self, preset):
         config = DQNConfig(reward_preset=preset, max_episode_steps=60, seed=0)
         env = make_env(config)
@@ -190,6 +204,16 @@ class TestEnvIntegration:
                 break
         assert "score" in info and "flaps" in info
         env.close()
+
+    @pytest.mark.parametrize("gamma", [0.95, 0.99, 0.999])
+    def test_shaping_discount_follows_the_agent(self, gamma):
+        """Shaping is only policy-invariant when its discount is the agent's."""
+        reward = reward_config_for(DQNConfig(reward_preset="shaped", gamma=gamma))
+        assert reward.shaping_gamma == gamma
+
+    def test_unshaped_presets_are_left_untouched(self):
+        reward = reward_config_for(DQNConfig(reward_preset="legacy", gamma=0.95))
+        assert reward == PRESETS["legacy"]
 
     def test_time_limit_truncates_instead_of_terminating(self):
         """The step limit must arrive as a truncation, never as a death."""
@@ -333,7 +357,159 @@ class TestSweepParsing:
         assert agent.act(_obs(0.5)) in (0, 1)
 
 
-class TestConfigRoundTrip:
+class TestRewardStudy:
+    def test_every_preset_runs_on_the_same_seeds(self, tmp_path):
+        """Presets are compared on identical seeds, or the comparison is luck."""
+        args = build_parser().parse_args(["reward", "--seeds", "3"])
+        variants = study_reward(args)
+
+        assert {name for name, _ in variants} == set(PRESETS)
+        for preset in PRESETS:
+            seeds = sorted(cfg.seed for name, cfg in variants if name == preset)
+            assert seeds == [0, 1, 2]
+        for name, cfg in variants:
+            assert cfg.reward_preset == name
+
+    def test_reward_terms_is_a_full_two_by_two(self):
+        """The 2x2 must cover both terms, alone and together."""
+        args = build_parser().parse_args(["reward_terms", "--seeds", "2"])
+        variants = study_reward_terms(args)
+
+        assert {name for name, _ in variants} == {"both", "no_ceiling", "no_alive", "neither"}
+        overrides = {name: cfg.reward_overrides for name, cfg in variants}
+        assert overrides["both"] == {}
+        assert overrides["neither"] == {"alive": 0.0, "ceiling": 0.0}
+        # one base preset throughout: the composition mode must not vary too
+        assert {cfg.reward_preset for _, cfg in variants} == {"additive"}
+
+    def test_overrides_replace_single_terms(self):
+        config = DQNConfig(reward_preset="additive", reward_overrides={"ceiling": 0.0})
+        reward = reward_config_for(config)
+        assert reward.ceiling == 0.0
+        # everything else stays as the preset had it
+        assert reward.alive == PRESETS["additive"].alive
+        assert reward.pipe == PRESETS["additive"].pipe
+
+    def test_unknown_override_is_rejected(self):
+        config = DQNConfig(reward_overrides={"ceilling": 0.0})
+        with pytest.raises(TypeError):
+            reward_config_for(config)
+
+    def test_overrides_survive_json(self):
+        config = DQNConfig(reward_overrides={"alive": 0.0, "ceiling": 0.0})
+        restored = DQNConfig.from_dict(json.loads(json.dumps(config.to_dict())))
+        assert restored.reward_overrides == {"alive": 0.0, "ceiling": 0.0}
+
+    def test_seed_offset_gives_fresh_seeds(self):
+        args = build_parser().parse_args(
+            ["reward", "--seeds", "2", "--seed-offset", "100", "--rewards", "legacy"]
+        )
+        assert sorted(cfg.seed for _, cfg in study_reward(args)) == [100, 101]
+
+    def test_finished_runs_are_skipped_only_with_identical_config(self, tmp_path):
+        args = build_parser().parse_args(["reward", "--seeds", "1", "--rewards", "sparse"])
+        (spec,) = build_specs(study_reward(args), tmp_path)
+        run_dir = tmp_path / spec["label"]
+        run_dir.mkdir()
+        (run_dir / "summary.json").write_text(json.dumps({"best_eval_score": 1.0}))
+
+        (run_dir / "config.json").write_text(json.dumps(spec["config"]))
+        assert completed_summary(spec)["label"] == spec["label"]
+
+        changed = dict(spec["config"], learning_rate=3e-4)
+        (run_dir / "config.json").write_text(json.dumps(changed))
+        assert completed_summary(spec) is None
+
+    def test_checkpoints_are_written_to_separate_files(self, tmp_path):
+        assert output_paths(tmp_path, "best.pt") == (
+            tmp_path / "evaluations.csv",
+            tmp_path / "aggregate.csv",
+        )
+        assert output_paths(tmp_path, "latest.pt") == (
+            tmp_path / "evaluations_latest.csv",
+            tmp_path / "aggregate_latest.csv",
+        )
+
+    def test_a_raised_frame_limit_writes_its_own_files(self, tmp_path):
+        """Re-measuring a censored score must not overwrite the censored one."""
+        assert output_paths(tmp_path, "best.pt", 200_000) == (
+            tmp_path / "evaluations_limit200000.csv",
+            tmp_path / "aggregate_limit200000.csv",
+        )
+
+
+class TestParamStudy:
+    def _variants(self, *extra):
+        args = build_parser().parse_args(["params", "--seeds", "3", *extra])
+        return study_params(args)
+
+    def test_each_variant_changes_exactly_one_parameter(self):
+        """One factor at a time, or a difference cannot be attributed."""
+        baseline = DQNConfig()
+        for name, config in self._variants():
+            if name == "baseline":
+                continue
+            differing = {
+                field
+                for field in DQNConfig.__dataclass_fields__
+                if field not in ("seed", "run_name")
+                and getattr(config, field) != getattr(baseline, field)
+            }
+            # the label is "<parameter>_<value>", and that parameter is the
+            # only thing the variant may change
+            assert differing == {name.rsplit("_", 1)[0]}, f"{name} aendert {differing}"
+
+    def test_the_baseline_runs_once_not_once_per_parameter(self):
+        variants = self._variants()
+        assert sum(1 for name, _ in variants if name == "baseline") == 3  # one per seed
+        expected = 3 + sum(len(values) for values in PARAM_GRID.values()) * 3
+        assert len(variants) == expected
+
+    def test_values_bracket_the_default(self):
+        """Values on both sides, or a flat result cannot be told from a peak."""
+        baseline = DQNConfig()
+        for param, values in PARAM_GRID.items():
+            default = getattr(baseline, param)
+            assert min(values) < default < max(values), param
+            assert default not in values, f"{param} wiederholt den Standardwert"
+
+    def test_a_subset_of_parameters_can_be_selected(self):
+        variants = self._variants("--params", "gamma")
+        assert {name.rsplit("_", 1)[0] for name, _ in variants} == {"baseline", "gamma"}
+
+
+class TestSignificance:
+    def test_perfect_separation_hits_the_smallest_possible_p(self):
+        """5 vs 5 seeds cannot do better than 0.008 -- the floor of the test."""
+        assert permutation_p(
+            np.array([10.0, 11, 12, 13, 14]), np.array([1.0, 2, 3, 4, 5])
+        ) == pytest.approx(2 / 252, abs=1e-6)
+
+    def test_identical_samples_are_not_significant(self):
+        values = np.array([1.0, 2, 3, 4, 5])
+        assert permutation_p(values, values) == 1.0
+
+    def test_direction_does_not_matter(self):
+        a, b = np.array([5.0, 6, 7]), np.array([1.0, 2, 9])
+        assert permutation_p(a, b) == permutation_p(b, a)
+
+    def test_a_single_outlier_is_not_enough(self):
+        """One lucky seed must not make a variant a winner."""
+        baseline = np.array([10.0, 11, 12, 13, 14])
+        lucky = np.array([9.0, 10.5, 11.5, 12.5, 500.0])
+        assert permutation_p(lucky, baseline) > 0.5
+
+    def test_unreached_levels_stay_nan(self, tmp_path):
+        path = tmp_path / "evaluations.csv"
+        path.write_text(
+            "algorithm,run,variant,run_seed,mean_score,steps_to_5,steps_to_10\n"
+            "dqn,a_seed0,a,0,10,100,\n"
+            "random,random,random,0,0,,\n",
+            encoding="utf-8",
+        )
+        runs = read_runs(path)
+        assert "random" not in runs  # the reference row has no seeds
+        assert np.isnan(runs["a"]["steps_to_10"][0])
     def test_new_fields_survive_json(self):
         config = DQNConfig(n_step=5, eval_max_episode_steps=12_345, hidden=(64, 32))
         restored = DQNConfig.from_dict(json.loads(json.dumps(config.to_dict())))

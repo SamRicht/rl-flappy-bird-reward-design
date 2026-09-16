@@ -15,8 +15,14 @@ Four studies are predefined:
     plus a textbook DQN with all three off. Shows what each part contributes.
 ``sweep``
     One hyperparameter varied over a list of values, everything else fixed.
+``params``
+    Several hyperparameters at once, each varied on its own around a shared
+    baseline -- the search for a better setting before the final run.
 ``reward``
     Every reward preset, repeated over several seeds.
+``reward_terms``
+    The alive bonus and the ceiling penalty switched off one at a time and
+    together -- which single term a difference between schemes comes from.
 
 Each run keeps one core busy, so runs go into a process pool with Torch pinned
 to a single thread per worker -- otherwise the runs fight over cores and each
@@ -81,6 +87,42 @@ ABLATIONS: Dict[str, Dict[str, object]] = {
     "no_nstep": {"n_step": 1},
     # everything off at once -- DQN as it was originally published
     "vanilla": {"double_dqn": False, "dueling": False, "n_step": 1},
+}
+
+
+#: The ``params`` study: the values tried per hyperparameter, one factor at a
+#: time. Only values *other* than the default are listed -- the baseline runs
+#: once for all of them, so N parameters cost N x (values - 1) + 1 arms instead
+#: of N x values. The values bracket the default from both sides, which is what
+#: tells "the default is a peak" apart from "we never looked further".
+PARAM_GRID: Dict[str, List] = {
+    # the classic first knob; 3e-4 is expected to be unstable at large Q-values
+    "learning_rate": [5e-5, 3e-4],
+    # sets how far ahead the agent plans; with the dense alive reward it also
+    # sets how large the Q-values get: 0.1 / (1 - gamma) is 2, 10 or 100
+    "gamma": [0.95, 0.999],
+    # the ablation found n=3 well ahead of n=1 under `legacy`; a faster reward
+    # scheme may shift that, and n=5 was never tried at this budget
+    "n_step": [1, 5],
+    # too frequent and the target chases itself, too rare and it is stale
+    "target_update_interval": [250, 4000],
+    # a faster-learning reward may no longer need 200k steps of exploration
+    "epsilon_decay_steps": [100_000, 400_000],
+    # 12 inputs may not need 256x256; a smaller net would also train faster
+    "hidden": [(64, 64), (512, 512)],
+}
+
+#: The ``reward_terms`` study: a 2x2 over the two terms that separate the
+#: winning schemes of the reward study from the losing ones. Everything runs in
+#: "additive" mode so the composition mode is not a second difference, and the
+#: pipe bonus and death penalty stay on everywhere -- only the two dense terms
+#: vary. ``both`` reproduces the ``additive`` preset, ``neither`` the ``sparse``
+#: one, but as part of one factorial design rather than two unrelated presets.
+REWARD_TERMS: Dict[str, Dict[str, float]] = {
+    "both": {},
+    "no_ceiling": {"ceiling": 0.0},
+    "no_alive": {"alive": 0.0},
+    "neither": {"alive": 0.0, "ceiling": 0.0},
 }
 
 
@@ -198,6 +240,16 @@ def run_grid(
     return summaries
 
 
+def seed_range(args: argparse.Namespace) -> range:
+    """The seeds of a study: ``--seeds`` of them, starting at ``--seed-offset``.
+
+    A final run of a configuration that was *chosen* on seeds 0 .. n-1 must be
+    measured on fresh seeds, or the choice has adapted to the luck of exactly
+    those seeds and the reported number comes out too optimistic.
+    """
+    return range(args.seed_offset, args.seed_offset + args.seeds)
+
+
 def base_config(args: argparse.Namespace) -> DQNConfig:
     """The configuration shared by every run of a study."""
     return DQNConfig.from_dict(vars(args))
@@ -206,7 +258,7 @@ def base_config(args: argparse.Namespace) -> DQNConfig:
 def study_seeds(args: argparse.Namespace) -> List[tuple]:
     """One configuration repeated over seeds, to measure the spread."""
     config = base_config(args)
-    return [("baseline", replace(config, seed=seed)) for seed in range(args.seeds)]
+    return [("baseline", replace(config, seed=seed)) for seed in seed_range(args)]
 
 
 def study_ablation(args: argparse.Namespace) -> List[tuple]:
@@ -216,7 +268,7 @@ def study_ablation(args: argparse.Namespace) -> List[tuple]:
     return [
         (name, replace(config, seed=seed, **ABLATIONS[name]))
         for name in names
-        for seed in range(args.seeds)
+        for seed in seed_range(args)
     ]
 
 
@@ -230,8 +282,36 @@ def study_sweep(args: argparse.Namespace) -> List[tuple]:
             replace(config, seed=seed, **{args.param: cast(value)}),
         )
         for value in args.values
-        for seed in range(args.seeds)
+        for seed in seed_range(args)
     ]
+
+
+def study_params(args: argparse.Namespace) -> List[tuple]:
+    """Several hyperparameters, each varied on its own around the baseline.
+
+    One factor at a time: every variant changes exactly one parameter, so a
+    difference can be attributed to it. The baseline runs once and serves as the
+    reference for all of them -- the default value of each parameter is
+    therefore *not* repeated per parameter, which is what keeps 6 parameters
+    affordable.
+
+    What this design cannot find is an interaction: two changes that only pay
+    off together. Finding those needs a grid, which costs the product instead of
+    the sum of the arms.
+    """
+    config = base_config(args)
+    names = args.params or list(PARAM_GRID)
+    variants = [("baseline", replace(config, seed=seed)) for seed in seed_range(args)]
+    variants += [
+        (
+            f"{param}_{_label_value(value)}",
+            replace(config, seed=seed, **{param: value}),
+        )
+        for param in names
+        for value in PARAM_GRID[param]
+        for seed in seed_range(args)
+    ]
+    return variants
 
 
 def study_reward(args: argparse.Namespace) -> List[tuple]:
@@ -241,7 +321,22 @@ def study_reward(args: argparse.Namespace) -> List[tuple]:
     return [
         (name, replace(config, seed=seed, reward_preset=name))
         for name in names
-        for seed in range(args.seeds)
+        for seed in seed_range(args)
+    ]
+
+
+def study_reward_terms(args: argparse.Namespace) -> List[tuple]:
+    """The alive bonus and the ceiling penalty switched on and off, 2x2.
+
+    The reward study compares whole schemes; this one asks which single term
+    the difference comes from.
+    """
+    config = replace(base_config(args), reward_preset="additive")
+    names = args.variants or list(REWARD_TERMS)
+    return [
+        (name, replace(config, seed=seed, reward_overrides=dict(REWARD_TERMS[name])))
+        for name in names
+        for seed in seed_range(args)
     ]
 
 
@@ -249,7 +344,9 @@ STUDIES = {
     "seeds": study_seeds,
     "ablation": study_ablation,
     "sweep": study_sweep,
+    "params": study_params,
     "reward": study_reward,
+    "reward_terms": study_reward_terms,
 }
 
 
@@ -257,6 +354,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run a grid of DQN trainings.")
     parser.add_argument("study", choices=sorted(STUDIES))
     parser.add_argument("--seeds", type=int, default=3, help="seeds per variant")
+    parser.add_argument(
+        "--seed-offset", type=int, default=0, help="first seed; use fresh seeds for final runs"
+    )
     parser.add_argument(
         "--workers", type=int, default=0, help="0 = number of cores minus two"
     )
@@ -271,7 +371,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--param", choices=sorted(SWEEPABLE), help="sweep: what to vary")
     parser.add_argument("--values", nargs="+", help="sweep: the values to try")
     parser.add_argument(
-        "--variants", nargs="+", choices=sorted(ABLATIONS), help="ablation: which ones"
+        "--params",
+        nargs="+",
+        choices=sorted(PARAM_GRID),
+        help="params: which hyperparameters (default: all of them)",
+    )
+    parser.add_argument(
+        "--variants",
+        nargs="+",
+        choices=sorted(set(ABLATIONS) | set(REWARD_TERMS)),
+        help="ablation / reward_terms: which variants",
     )
     parser.add_argument(
         "--rewards", nargs="+", choices=sorted(PRESETS), help="reward: which presets"

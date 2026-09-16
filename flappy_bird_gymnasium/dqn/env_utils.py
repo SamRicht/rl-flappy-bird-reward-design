@@ -1,6 +1,7 @@
 """Environment construction, in one place so training and evaluation agree."""
 
 import random
+from dataclasses import replace
 from typing import Callable, Dict, Optional
 
 import gymnasium
@@ -25,6 +26,27 @@ def limit_torch_threads(n_threads: int = 1) -> None:
     except RuntimeError:
         # already initialised -- harmless, the pool worker is fresh anyway
         pass
+
+
+def reward_config_for(config: DQNConfig) -> RewardConfig:
+    """The reward scheme of `config`: its preset, overrides applied, gamma tied.
+
+    `reward_overrides` replaces single terms of the preset, which is how one
+    term of a scheme is isolated -- whole presets differ in several terms at
+    once, so a difference between two of them cannot be attributed to one.
+
+
+    Potential-based shaping only leaves the optimal policy unchanged when its
+    discount equals the agent's. The preset default (0.99) happens to match the
+    DQN default, but a gamma sweep would silently break the guarantee -- so the
+    two are set from the same value, as `rl/experiments.py` does for PPO.
+    With n-step returns the per-step terms still telescope to
+    ``gamma**n * Phi(s_n) - Phi(s_0)``, so the per-step gamma is the right one.
+    """
+    reward = RewardConfig.preset(config.reward_preset, **config.reward_overrides)
+    if reward.uses_shaping:
+        reward = replace(reward, shaping_gamma=config.gamma)
+    return reward
 
 
 def make_env(
@@ -55,7 +77,7 @@ def make_env(
         use_lidar=config.use_lidar,
         normalize_obs=config.normalize_obs,
         pipe_gap=config.pipe_gap,
-        reward_config=RewardConfig.preset(config.reward_preset),
+        reward_config=reward_config_for(config),
     )
     limit = config.max_episode_steps if max_episode_steps is None else max_episode_steps
     return gymnasium.wrappers.TimeLimit(env, max_episode_steps=limit)
