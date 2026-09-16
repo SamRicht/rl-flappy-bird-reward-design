@@ -133,3 +133,16 @@ dmypy.json
 
 # macOS
 .DS_Store
+
+# Training artefacts: CSV logs and network checkpoints. Regenerable from the
+# code plus each run's config.json, and far too large for the repository --
+# a single reward study is tens of megabytes of binary checkpoints.
+runs/
+
+# The report, its figures, evaluation dumps and gameplay recordings. All of it
+# is generated from the code plus the run logs, and it is read locally rather
+# than from the repository, so none of it is version-controlled.
+/docs/
+
+# Leftover recording at the repository root, predating this work.
+/video.gif
