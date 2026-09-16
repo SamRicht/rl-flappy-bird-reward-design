@@ -3,3 +3,5 @@ numpy
 pygame
 matplotlib
 tensorflow
+torch
+Pillow

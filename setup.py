@@ -46,6 +46,7 @@ REQUIRED_PACKAGES = [
     "numpy",
     "pygame",
     "matplotlib",
+    "Pillow",
 ]
 
 # Packages which are only needed for testing code.
