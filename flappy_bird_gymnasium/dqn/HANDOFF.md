@@ -1,4 +1,4 @@
-# Übergabe DQN — Stand 16.09.2026
+# Übergabe DQN — Stand 17.09.2026
 
 Arbeitsdokument für die Fortsetzung, nicht für die Präsentation. Die
 inhaltlichen Ergebnisse und ihre Deutung stehen in **`ARBEITSSTAND.md`**; dieses
@@ -13,12 +13,20 @@ hier weiterarbeitet.
 ## 1. In einem Absatz
 
 Ein DQN-Agent wurde von Grund auf gebaut (das Repository enthielt keinen
-Trainingscode) und in zwei Studien über je 5 Seeds untersucht: welche
-Algorithmus-Bausteine etwas bringen (*Ablation*, 25 Läufe) und welches
-Belohnungsschema am besten funktioniert (*Reward*, 35 Läufe). Beide sind
-ausgewertet und dokumentiert. Als Nächstes folgt die **Parameter-Studie**
-(45 Läufe, startbereit), danach ein **finaler Lauf auf neuen Seeds**, dann
-Aufnahmen und der Vergleich mit PPO, Q-Learning und CNN.
+Trainingscode) und in drei Studien über je 5 Seeds untersucht — zusammen mit dem
+finalen Lauf **140 Läufe**: welche Algorithmus-Bausteine etwas bringen
+(*Ablation*, 25 Läufe), welches Belohnungsschema am besten funktioniert
+(*Reward*, 35 Läufe), welche Hyperparameter (*Parameter*, 65 Läufe) und ob die
+gewählte Konfiguration auf **neuen Seeds** hält (*final*, 15 Läufe). **Alles ist
+gerechnet und ausgewertet.**
+
+Das wichtigste Einzelergebnis für die Übergabe: **Der finale Lauf hat das
+Hyperparameter-Tuning widerlegt** (ARBEITSSTAND 8.9). Die ungetunte
+Konfiguration aus Abschnitt 7 gewinnt auf den gehaltenen Seeds. Sie ist die
+Konfiguration des finalen Agenten — nichts ist mehr zu ändern.
+
+Als Nächstes folgen **Aufnahmen** und der **Vergleich mit PPO, Q-Learning und
+CNN**. Rechenzeit wird dafür nicht mehr gebraucht.
 
 ---
 
@@ -34,18 +42,31 @@ Die venv liegt **neben** dem Repo (`Flappy-Bird-KI\.venv`), nicht darin. Ein
 blankes `python` nimmt das System-Python, in dem das Paket nicht installiert
 ist — das ist die häufigste Stolperfalle.
 
-**Der nächste Lauf** (Details und Begründung in ARBEITSSTAND 12.3):
+**Es steht kein Lauf mehr an.** Alle Ergebnisse liegen vor. Um sie
+nachzuvollziehen, genügen diese Befehle — sie rechnen nichts neu und laufen in
+Sekunden:
 
 ```powershell
-python -m flappy_bird_gymnasium.dqn.experiments params `
-    --seeds 5 --total-steps 1000000 --reward shaped `
-    --params learning_rate gamma n_step epsilon_decay_steps `
-    --eval-interval 50000 --eval-episodes 10 --eval-max-episode-steps 200000 --workers 13
+python -m flappy_bird_gymnasium.dqn.significance runs/final_dqn --baseline baseline
+python -m flappy_bird_gymnasium.dqn.significance runs/final_dqn --baseline baseline --file evaluations_latest.csv
+python -m flappy_bird_gymnasium.dqn.significance runs/study_ablation --baseline full
+python -m flappy_bird_gymnasium.dqn.significance runs/study_reward --baseline legacy --file evaluations_limit200000.csv
 ```
 
-45 Läufe, rund 6 bis 6,5 Stunden auf 14 Kernen. Ohne `--params` laufen alle sechs
-Parameter des Rasters (65 Läufe, ~8,5 Stunden). Bricht der Lauf ab:
-**denselben Befehl erneut starten**, fertige Läufe werden übersprungen.
+Der zweite Befehl ist der wichtigste des Projekts: Er zeigt, dass das
+Hyperparameter-Tuning auf neuen Seeds **nicht** hält (ARBEITSSTAND 8.9).
+
+**Die Zahl für die Präsentation** — ungetunte Konfiguration, Seeds 100 – 104,
+zensurfrei, letzter Checkpoint:
+
+> **Ø 488,7 ± 408,7 Röhren**, Median 504,5, Spanne 48,3 – 1.121,1.
+> Zufallsreferenz: 0,00.
+
+**Der Agent für die Aufnahmen** ist ein anderer und darf es sein (Regel 2 gilt
+für berichtete Zahlen, nicht für Illustrationen):
+`runs/final_dqn/hidden_512x512_seed102/best.pt` — Ø 3.447,7 Röhren, Median
+1.823,5, beste Episode 13.273. Dieser Wert ist zensiert und damit eine
+Untergrenze.
 
 ---
 
@@ -57,16 +78,40 @@ Parameter des Rasters (65 Läufe, ~8,5 Stunden). Bricht der Lauf ab:
 | `flappy_bird_gymnasium/dqn/ARBEITSSTAND.md` | Ergebnisse, Deutung, Hypothesen, Befehle — **die Hauptquelle** |
 | `flappy_bird_gymnasium/dqn/HANDOFF.md` | dieses Dokument |
 | `flappy_bird_gymnasium/dqn/significance.py` | Permutationstest gegen die Seed-Streuung |
+| `flappy_bird_gymnasium/dqn/figures.py` | die fünf Abbildungen für Präsentation und Vergleich |
+| `flappy_bird_gymnasium/dqn/record.py` | Greedy-Episode als GIF aufzeichnen |
+| `docs/` | erzeugte Abbildungen und Aufnahme — nicht versioniert, jederzeit neu erzeugbar |
 | `flappy_bird_gymnasium/rl/rewards.py` | Reward-Definitionen, **geteilt mit der PPO-Arbeit** — nicht einseitig ändern |
 | `flappy_bird_gymnasium/tests/test_dqn_agent.py` | 63 Tests |
 | `runs/study_ablation/` | Ablationsstudie, 25 Läufe (ARBEITSSTAND 8.5) |
 | `runs/study_reward/` | Reward-Studie, 35 Läufe (ARBEITSSTAND 8.6) |
+| `runs/study_params/` | Parameter-Studie, 65 Läufe (ARBEITSSTAND 8.7) |
+| `runs/final_dqn/` | **finaler Lauf, 15 Läufe auf neuen Seeds (ARBEITSSTAND 8.9)** |
 | `runs/dqn_v1`, `runs/dqn_v2` | frühe Einzelläufe (8.1, 8.2) |
 | `runs/study_sweep/` | n-step-Replikation über 300k Schritte (8.3) |
 
 `runs/` steht in `.gitignore`. Die Ergebnisse existieren **nur lokal auf diesem
-Rechner** — vor einem Rechnerwechsel sichern, sonst müssen 60 Läufe neu
-gerechnet werden.
+Rechner**: rund 420 MB, 140 Läufe, etwa 24 Stunden Rechenzeit — und ein Stromausfall
+hat während der Studien schon einmal zugeschlagen (die Läufe waren danach
+reproduzierbar, aber nur, weil sie fertig waren).
+
+**Das ist derzeit das größte Einzelrisiko der Arbeit.** Ein Plattenfehler kostet
+die gesamte Auswertungsgrundlage der Präsentation. Von den 371 MB sind 316 MB
+Checkpoints und nur 52 MB Text (CSV, JSON, Grafiken). Die Checkpoints sind aus
+Code und `config.json` reproduzierbar, die CSVs nicht ohne 20 Stunden Rechnen —
+ein Backup der Textdateien genügt also und ist in Sekunden erledigt:
+
+```powershell
+robocopy runs <Zielordner>\runs /S /XF *.pt
+```
+
+**Eine Ausnahme:** Die `best.pt` aus `runs/final_dqn` wird für die Aufnahmen
+gebraucht. `runs/final_dqn` gehört deshalb **vollständig** ins Backup, inklusive
+Checkpoints — das sind rund 50 MB:
+
+```powershell
+robocopy runs\final_dqn <Zielordner>\runs\final_dqn /S
+```
 
 ### Ausgabe je Lauf
 
@@ -84,7 +129,7 @@ Für die Reward-Studie liegen zusätzlich die Präsentationsgrafiken
 
 ---
 
-## 4. Die sechs Regeln, an denen hier alles hängt
+## 4. Die sieben Regeln, an denen hier alles hängt
 
 Diese Regeln sind aus Fehlern entstanden (ARBEITSSTAND Abschnitt 9). Wer sie
 bricht, produziert Zahlen, die nicht halten.
@@ -101,7 +146,16 @@ bricht, produziert Zahlen, die nicht halten.
    letzter Checkpoint und der Verlauf können sich widersprechen — in der
    Ablation hing der Double-DQN-Befund allein am besten Checkpoint.
 6. **Auf neuen Seeds berichten, was auf alten Seeds ausgewählt wurde.** Sonst
-   ist die Zahl zu optimistisch (`--seed-offset 100`).
+   ist die Zahl zu optimistisch (`--seed-offset 100`). **Diese Regel hat sich im
+   finalen Lauf als die wichtigste von allen erwiesen:** Zwei Parameter, die in
+   8.7 in mehreren Messungen *und* monoton über drei Werte gewonnen hatten,
+   kehren sich auf neuen Seeds um (8.9). Weder Konsistenz über Messungen noch
+   Monotonie haben die Überanpassung verhindert — nur der gehaltene Seed-Satz.
+7. **Ein Messlimit ist eine Annahme über das Können des Agenten.** Wird der
+   Agent besser, muss das Limit mitwachsen. Das gilt auch für die
+   Zwischenevaluation `quick_eval`, die am Trainingslimit misst (~79 Röhren) —
+   ab der Reward-Studie deckelt sie den Greedy-Verlauf und die Auswahl von
+   `best.pt` (ARBEITSSTAND 9.9).
 
 ---
 
@@ -115,6 +169,8 @@ bricht, produziert Zahlen, die nicht halten.
 | Studie zu groß planen | Rechnen mit: 13 Läufe gleichzeitig, ~100 min je Lauf über 1M Schritte, also ~1,7 h je Durchgang. Läufe aufrunden auf volle Durchgänge — der 40. Lauf kostet so viel wie der 52. |
 | Laufzeit über weniger Seeds sparen | Mit 3 statt 5 Seeds steigt der kleinstmögliche p-Wert von 0,008 auf 0,1; damit ist nichts mehr nachweisbar. Lieber Varianten streichen |
 | Zwischenevaluation als Ergebnis lesen | `eval.csv` misst mit dem **Trainings**-Limit (3.000 Frames ≈ 79 Röhren) und ist oben gedeckelt. Belastbare Zahlen kommen aus `summarize.py` |
+| `minutes` als Eigenschaft einer Variante lesen | Die Spalte misst, **wann** ein Lauf an der Reihe war. Läufe aus dem letzten, dünn belegten Durchgang wirken doppelt so schnell. Nur innerhalb eines Durchgangs vergleichbar (ARBEITSSTAND 9.8) |
+| Messlimit aus der Vorstudie übernehmen | Wird der Agent besser, zensiert das alte Limit wieder. In der Parameter-Studie liefen acht Messungen ins 200.000er-Limit, obwohl die Reward-Studie dort noch zensurfrei war |
 | Trainings-Score mit Greedy-Score verwechseln | `train.csv` enthält ε-greedy-Episoden (ε = 0,01). Bei 300 Frames Länge fallen im Schnitt drei Zufallsaktionen an, eine genügt zum Tod. Der Trainings-Score liegt deshalb systematisch unter dem Greedy-Score |
 | `rl/rewards.py` ändern | Die Datei ist mit der PPO-Arbeit geteilt (Colins Branch `trainingsumgebung_update`). Eine Änderung macht die Verfahren unvergleichbar — stattdessen `reward_overrides` in der DQN-Konfiguration nutzen |
 | `pipe_gap` verändern | 100 ist der Standardwert des Originalspiels. Ein anderer Wert verändert das Spiel und macht Vergleiche mit allen bisherigen Zahlen ungültig |
@@ -130,6 +186,10 @@ bricht, produziert Zahlen, die nicht halten.
 | Double + Dueling + n-step 3 als Basis | Ablation, 8.5 |
 | Dueling bleibt, obwohl ohne Nutzen | schadet nicht, hält die Konfiguration über alle Studien stabil |
 | `shaped` als Basis der Parameter-Studie | schnellstes und bestes Schema, 8.6 |
+| `hidden` **256×256** — 512×512 verworfen | Der Stabilitätsgewinn aus 8.7 hielt auf neuen Seeds nicht (8.9). Übrig bleibt nur 18 % schnelleres Lernen zum doppelten Rechenpreis (149,5 gegen 75,8 min) |
+| `target_update_interval` **1.000** — 250 verworfen | dasselbe; auf neuen Seeds in keiner Messung mehr ein Effekt (8.9) |
+| `epsilon_decay_steps` und `learning_rate` **nicht** geändert | beide nur schneller, nicht besser — bei festem Budget kein Gewinn (8.7) |
+| Kein weiteres Hyperparameter-Tuning | 65 Läufe haben am Endscore nichts bewegt, und die zwei scheinbaren Gewinner sind widerlegt. Der Hebel liegt im Reward (8.6), nicht in den Parametern |
 | 1.000.000 Schritte je Lauf | eingespieltes Budget aller Studien, ~100 min je Lauf |
 | 5 Seeds (0 – 4) je Variante | gepaart über alle Studien hinweg |
 | `pipe_gap` 100 | Standardwert des Originalspiels |
@@ -144,6 +204,9 @@ bricht, produziert Zahlen, die nicht halten.
 | Faires Budget für den Vergleich der vier Verfahren (Schritte? Wandzeit?) | **Team**, vor den Endläufen (ARBEITSSTAND 10.4) |
 | Gemeinsames Reward-Schema für den Verfahrensvergleich | **Team** (12.8). Für „bester DQN-Agent" ist es `shaped`/`survival`, für den fairen Vergleich vermutlich `legacy` |
 | Kontrollierter Nachweis, dass die Deckenstrafe die Ursache ist | optional, Lauf ist startbereit (12.5) |
+| Ob Double DQN, Dueling und Huber-Loss unter `shaped` noch etwas bringen | offen; unter `legacy` ausgewählt, nie nachgeprüft (ARBEITSSTAND 8.7, „Eine Altlast"). Ein Satz für die Präsentation |
+| Welche Konfiguration in den Verfahrensvergleich geht | **entschieden** — die aus ARBEITSSTAND 7, für jedes Schema. Es gibt keine getunte Variante mehr (8.9). Die Bausteinwahl bleibt schemaabhängig (12.8) |
+| `quick_eval` misst am Trainingslimit | offen; deckelt Greedy-Verlauf und `best.pt`-Auswahl (ARBEITSSTAND 9.9). Für den Verfahrensvergleich relevant, falls dort Zwischenmessungen verglichen werden |
 | Zusammenführung `dqn/` und `rl/` | für die gemeinsame Endauswertung (13) |
 | Aufnahmen des Agenten | `rl/record.py` aus dem PPO-Branch übernehmen |
 
@@ -151,10 +214,15 @@ bricht, produziert Zahlen, die nicht halten.
 
 ## 8. Git
 
-Auf `fb_drl_dqn` liegen **nicht committete Änderungen** (Studientypen `params`
-und `reward_terms`, `reward_overrides`, getrennte Ergebnisdateien, Tests,
-Dokumentation). Vor dem nächsten großen Lauf committen, damit die Ergebnisse
-einem Code-Stand zugeordnet werden können.
+Der Code ist auf `fb_drl_dqn` committet; `f249d4f` ist der Stand, unter dem alle
+140 Läufe entstanden sind — der finale Lauf eingeschlossen. Offen sind nur
+Änderungen an diesen beiden Markdown-Dateien.
+
+**Am DQN-Code ist nichts mehr zu ändern**, solange die Zahlen aus 8.5 bis 8.9
+gelten sollen (`agent.py`, `train.py`, `env_utils.py`, `model.py`,
+`rl/rewards.py`). Die eine bekannte Verbesserung — ein eigenes Limit für
+`quick_eval` (ARBEITSSTAND 9.9) — würde alle bisherigen Läufe unvergleichbar
+machen und lohnt sich nur, wenn danach ohnehin neu gerechnet wird.
 
 Colins Branch `trainingsumgebung_update` wurde nach unserem Merge neu
 geschrieben (force-push) und sitzt jetzt auf dem aufgeräumten `main`.
@@ -165,29 +233,34 @@ gemacht werden, nicht nebenbei.
 
 ---
 
-## 9. Nach dem Parameter-Lauf: was zu tun ist
+## 9. Was jetzt noch zu tun ist
 
-1. **Auswerten**, beide Checkpoints:
+Der finale Lauf ist gerechnet und in ARBEITSSTAND 8.9 ausgewertet. Es fehlt kein
+Experiment mehr. Offen sind nur noch Darstellung und Teamarbeit:
+
+1. **Präsentation bauen.** Abbildungen und Aufnahme liegen fertig in `docs/`
+   (ARBEITSSTAND 12.4a) und sind mit zwei Befehlen neu erzeugbar:
+
    ```powershell
-   python -m flappy_bird_gymnasium.dqn.summarize runs/study_params --episodes 30
-   python -m flappy_bird_gymnasium.dqn.summarize runs/study_params --episodes 30 --checkpoint latest.pt
-   python -m flappy_bird_gymnasium.dqn.significance runs/study_params --baseline baseline
-   python -m flappy_bird_gymnasium.dqn.plot runs/study_params --study --out runs/study_params/params.png
+   python -m flappy_bird_gymnasium.dqn.figures
+   python -m flappy_bird_gymnasium.dqn.record `
+       runs/final_dqn/hidden_512x512_seed102/best.pt --seconds 30 --every 2 --scale 0.75
    ```
-2. **Gewinner bestimmen.** Eine Variante zählt nur, wenn sie die Basis in
-   mehreren Messungen schlägt (Regel 5). Bei 13 Varianten gegen dieselbe Basis
-   sind Zufallstreffer zu erwarten — im Zweifel bei der Basis bleiben.
-3. **Ergebnisse in ARBEITSSTAND.md** als Abschnitt 8.7 dokumentieren, mit
-   Abgleich gegen die Hypothesen aus 11.4. Das Schema der Abschnitte 8.5 und 8.6
-   übernehmen: Tabelle, Signifikanz, Deutung, Hypothesen-Abgleich.
-4. **Finalen Lauf** starten (12.4), mit `--seed-offset 100` und Messlimit
-   500.000.
-5. **Aufnahmen** erstellen und den Vergleich mit dem Team vorbereiten.
+
+   Die belastbaren Achsen sind Reward-Schema (Faktor 6), Algorithmus-Bausteine
+   (Faktor 9) und Lerngeschwindigkeit. Der Endscore des besten Checkpoints trägt
+   wenig — der Grund steht in ARBEITSSTAND 9.9. Der stärkste methodische Punkt
+   ist 8.9: ein Befund, der auf gehaltenen Seeds gefallen ist, mit der
+   Vorhersage schriftlich vor dem Lauf (12.4).
+2. **Vergleich mit dem Team** vorbereiten — dafür fehlt die Budget-Entscheidung
+   (ARBEITSSTAND 10.4) und das gemeinsame Reward-Schema (12.8).
+   `dqn_lernkurve.png` zeigt das Format, in dem die vier Verfahren
+   nebeneinandergelegt werden können; die `algorithm`-Spalte in den
+   Ergebnis-CSVs ist dafür schon vorgesehen.
+
+Optional, falls Rechenzeit übrig ist: die Term-Studie (ARBEITSSTAND 12.5, 20
+Läufe, ~3 h). Sie führt den kontrollierten Nachweis für den Deckenstrafen-Befund
+aus 8.6 — der ist derzeit eine sehr konsistente Korrelation, kein Beweis.
 
 Der Signifikanztest liegt als `significance.py` im Paket und reproduziert die
-p-Werte aus ARBEITSSTAND 8.5 und 8.6:
-
-```powershell
-python -m flappy_bird_gymnasium.dqn.significance runs/study_ablation --baseline full
-python -m flappy_bird_gymnasium.dqn.significance runs/study_reward --baseline legacy --file evaluations_limit200000.csv
-```
+p-Werte aus ARBEITSSTAND 8.5, 8.6 und 8.9 — die Befehle stehen in Abschnitt 2.

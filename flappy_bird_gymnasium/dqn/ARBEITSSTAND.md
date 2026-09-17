@@ -2,8 +2,9 @@
 
 Vollständige Dokumentation der DQN-Arbeit: was vorhanden war, was gebaut wurde,
 welche Experimente gelaufen sind, was sie ergeben haben, und welche Läufe
-vorbereitet sind. Stand: 16.09.2026, nach Ablations- und Reward-Studie
-(Abschnitte 8.5 und 8.6).
+vorbereitet sind. Stand: 17.09.2026, **nach dem finalen Lauf** (Abschnitte 8.5
+bis 8.9). Alle 140 Läufe sind gerechnet und ausgewertet; als Nächstes folgen
+Aufnahmen und der Vergleich mit PPO, Q-Learning und CNN.
 
 Das Dokument ist als Grundlage für die Präsentation gedacht. Abschnitt 11
 (*Was sich aus welchem Ergebnis schließen lässt*) formuliert die Hypothesen
@@ -33,21 +34,37 @@ und was eine nachträgliche Erklärung.
 
 ## 1. Kurzfassung
 
-Aus einem Repository ohne Trainingscode wurde ein DQN-Agent gebaut, der im
-Mittel **304 Röhren** passiert. Die Zufallspolicy schafft 0.
+Aus einem Repository ohne Trainingscode wurde ein DQN-Agent gebaut. Die
+Zufallspolicy passiert 0 Röhren; der beste gemessene Einzellauf 1.173.
 
-| Lauf | Konfiguration | Ø Score (50 Episoden) |
+| Lauf | Konfiguration | Ø Score |
 | --- | --- | --- |
 | Zufall | — | 0,00 |
-| `dqn_v1` | 500k Schritte, Double + Dueling | 7,68 |
-| `dqn_v2` | 2M Schritte, Double + Dueling + n-step 3 | **304,26** |
+| `dqn_v1` | 500k Schritte, Double + Dueling, `legacy` | 7,68 |
+| `dqn_v2` | 2M Schritte, + n-step 3, `legacy` | 304,26 |
+| `survival_seed3` | 1M Schritte, Reward `survival` (8.6) | **1.173** |
+
+**Die Endzahl der Präsentation** kommt aus dem finalen Lauf (8.9) und ist ein
+Mittelwert über fünf Seeds mit Streuung — nicht eine der Zahlen oben, denn
+`dqn_v2` ist ein einzelner Lauf unter dem alten Belohnungsschema und
+`survival_seed3` der beste aus 35 (Regel: Abschnitt 9, 10.2):
+
+> **Ø 488,7 ± 408,7 Röhren**, Median 504,5, Spanne 48,3 – 1.121,1, gemessen auf
+> fünf Seeds, die an keiner Auswahl beteiligt waren, zensurfrei. Zufall: 0,00.
+
+Das ist die Zahl der **ungetunten** Konfiguration aus Abschnitt 7. Die in der
+Parameter-Studie gewählte getunte Konfiguration erreichte dort beim letzten
+Checkpoint einen Median von 558 bis 662 Röhren gegenüber 186 bei der Basis (8.7)
+— **dieser Befund hat den Test auf neuen Seeds nicht überstanden und kehrt sich
+dort um** (8.9). Berichtet wird deshalb die einfache Konfiguration; sie ist
+zugleich die schnellste.
 
 Wichtiger als die Zahl ist die Methodik, die dabei entstanden ist: Studien über
 mehrere Seeds, gepaarte Auswertung, zensurfreie Metriken und eine Zufalls-Referenz.
 Ohne die sind Vergleiche zwischen Lernverfahren nicht belastbar — was sich an
 einem eigenen Fehlschluss gezeigt hat (Abschnitt 9).
 
-**Zwei Studien mit je 5 Seeds pro Variante sind ausgewertet:**
+**Drei Studien mit je 5 Seeds pro Variante plus der finale Lauf — 140 Läufe:**
 
 *Ablation* (25 Läufe, Abschnitt 8.5): Die drei Erweiterungen zusammen
 verneunfachen den Score gegenüber Lehrbuch-DQN (164 gegen 18). Den größten und
@@ -61,6 +78,28 @@ Algorithmus-Bausteine — Faktor 6 zwischen bestem und schlechtestem Schema.
 deutlich und lernen rund 40 % schneller. Auffällig: Die drei besten Schemata
 sind genau die drei **ohne Deckenstrafe**. Und `survival` erreicht seine 437
 Röhren, **ohne dass das Passieren einer Röhre je belohnt wird**.
+
+*Parameter* (65 Läufe, Abschnitt 8.7): Am **Endscore ändert kein einziger
+Hyperparameter etwas** — die Seed-Streuung ist größer als jeder Effekt. Zwei
+Parameter verbessern dafür die **Stabilität** deutlich und monoton über alle drei
+getesteten Werte: häufigere Target-Kopien (`target_update_interval` 250) und ein
+größeres Netz (512×512). Beim letzten Checkpoint — dem, den man bekommt, wenn man
+bei 1M einfach stoppt — bringt das 558 bzw. 662 Röhren statt 186. Die Parameter
+heben also nicht die Decke, sondern den Boden.
+
+*Finaler Lauf* (15 Läufe, Abschnitt 8.9): Die beiden Parameter-Gewinner werden
+auf neuen Seeds **widerlegt** — die ungetunte Basis gewinnt beim letzten
+Checkpoint mit Median 504 gegen 289. Der Einbruch, den das Tuning verhindern
+sollte, tritt auf den neuen Seeds gar nicht erst auf; er war eine Eigenschaft der
+Auswahl-Seeds. Übrig bleibt ein einziger replizierter Effekt: Das große Netz
+lernt 18 % schneller — zum doppelten Rechenpreis. **Der gehaltene Seed-Satz hat
+damit einen Fehlbefund abgefangen, bevor er in die Präsentation ging.**
+
+Zwei Querbezüge, die erst durch die dritte Studie sichtbar wurden: Unter `shaped`
+ist **n-step fast wirkungslos**, obwohl es unter `legacy` der größte
+Einzelbaustein war (8.5) — Shaping und n-step lösen dasselbe Problem. Und die
+**Explorationsdauer gehört zum Reward**: Unter `shaped` lässt sie sich halbieren,
+ohne etwas zu verlieren.
 
 **63 Tests**, alle grün. Reproduzierbarkeit ist belegt: Die `legacy`-Läufe der
 Reward-Studie sind Zeile für Zeile identisch mit den `full`-Läufen der Ablation.
@@ -144,6 +183,8 @@ Neues Paket `flappy_bird_gymnasium/dqn/`:
 | `summarize.py` | ~375 | gepaarte Auswertung, Aggregation über Seeds, Zufalls-Referenz |
 | `plot.py` | ~250 | Lernkurven für Einzelläufe, Seed-Bänder für Studien |
 | `significance.py` | ~185 | Permutationstest: hält ein Unterschied der Seed-Streuung stand? |
+| `figures.py` | ~330 | die fünf verfahrensbezogenen Abbildungen für Präsentation und Vergleich |
+| `record.py` | ~150 | zeichnet eine Greedy-Episode als GIF auf |
 | `tests/test_dqn_agent.py` | ~535 | 63 Tests |
 
 ### Der Agent
@@ -264,6 +305,12 @@ Ewig-Überlebens ist 0,1 ÷ (1 − 0,99) = **10**. MSE plus große TD-Fehler erg
 Gradienten, die das Netz zerlegen. `smooth_l1_loss` ist jenseits von 1 linear
 statt quadratisch; dazu Gradient-Clipping bei 10,0.
 
+**Diese Rechnung gilt für `legacy`**, unter dem die Entscheidung fiel. Die
+Schemata `shaped` und `sparse` haben `alive = 0,0`, ihre Q-Werte bleiben also
+klein und das Argument trägt dort nicht. Huber-Loss bleibt trotzdem — es ist die
+konservative Wahl und schadet bei kleinen Fehlern nicht, weil es dort ohnehin
+quadratisch ist. Siehe 8.7, „Eine Altlast, die diese Studie sichtbar macht".
+
 ### 6.2 `terminated` strikt getrennt von `truncated`
 
 Nur ein Absturz beendet das Bootstrapping in der Bellman-Gleichung. Das
@@ -363,6 +410,12 @@ Vollständige Liste mit Begründung. Geänderte Werte sind markiert.
 | `buffer_size` | 100.000 | 200.000 | Bei Episoden von 50 Frames fasste der alte Puffer nur ~2.000 Episoden — zu wenig, um seltene erfolgreiche Durchgänge zu halten. |
 | `eval_episodes` | 10 | 20 | Mit 10 Episoden konnte ein Glückslauf eine tatsächlich bessere Policy schlagen. Konkret passiert, siehe 9.1. |
 | Episodenlimit | Score 100 | 3.000 Frames | Umstellung auf `TimeLimit`, passend zu `rl/envs.py` der PPO-Arbeit. |
+
+**Diese Tabelle gilt für alle Studien — auch nach dem finalen Lauf.** Der finale
+Lauf hat zwei Abweichungen geprüft (`hidden` 512×512 und
+`target_update_interval` 250, aus 8.7) und **beide verworfen**: Auf neuen Seeds
+gewinnt die Konfiguration dieser Tabelle (8.9). Sie ist damit nicht nur die, unter
+der 8.5 bis 8.7 entstanden sind, sondern auch die des finalen Agenten.
 
 ---
 
@@ -740,7 +793,322 @@ identisch** — über 8.000 Episoden je Lauf, in einer getrennten Studie, Tage
 später gestartet. Damit ist belegt, dass jede Zahl dieses Dokuments aus Code und
 `config.json` reproduzierbar ist.
 
-### 8.7 Durchsatz
+### 8.7 Parameter-Studie
+
+Alle sechs Parameter des Rasters, jeder für sich um eine gemeinsame Basis herum
+variiert: **13 Varianten × Seeds 0 – 4 = 65 Läufe**, je 1.000.000 Schritte,
+Reward `shaped`, sonst die Konfiguration aus Abschnitt 7. Endmessung mit
+`summarize.py`: 30 gepaarte Episoden je Lauf (Evaluations-Seed 90.000),
+Messlimit 200.000 Frames.
+
+Grafiken: `runs/study_params/params.png` (Trainingskurven mit Seed-Bändern, aus
+`plot.py --study`) und **`params_greedy.png`** — die Hauptgrafik: drei Messungen
+nebeneinander, ein Punkt je Seed, bei gleicher Ordnung der Varianten. Sie zeigt
+den Kernbefund direkt: Im linken Feld (bester Checkpoint) liegen alle Varianten
+übereinander, im mittleren (letzter Checkpoint) trennen sich zwei ab.
+
+Gelaufen in drei Aufrufen (45 Läufe, dann `--params hidden`, dann der Rest des
+Rasters). Die Konfigurationen sind davon unberührt — jeder Lauf hat seine eigene
+`config.json`, die Basis ist für alle dieselbe, und `study.json` trägt nach dem
+letzten Aufruf wieder alle 65 Einträge.
+
+#### Ergebnis
+
+Sortiert nach dem **letzten Checkpoint**, weil nur der hier überhaupt trennt.
+Ø ± Standardabweichung zwischen den Seeds, daneben der Median — die
+Seed-Verteilungen sind stark schief, einzelne Glücks-Seeds ziehen die
+Mittelwerte weit nach oben.
+
+| Variante | bester CP Ø | Median | letzter CP Ø | Median | schlecht. Seed (letzter) | Verlauf ab 550k | bis 10 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `hidden_512x512` | 425,7 ± 249,9 | 374,0 | **783,2 ± 532,9**\* | **558,1** | **279,3** | 57,7 | **331k** |
+| `target_update_interval_250` | **927,6 ± 716,9**\* | **981,4** | **604,6 ± 299,6** | **661,7** | **206,1** | **60,9** | 383k |
+| `epsilon_decay_steps_400000` | 1.111,8 ± 1.160,0\* | 612,9 | 480,8 ± 901,2\* | 94,5 | 23,1 | 55,0 | 518k |
+| `learning_rate_0p0003` | 285,2 ± 76,6 | 275,9 | 414,7 ± 517,5 | 252,4 | 17,9 | **62,5** | **304k** |
+| `n_step_1` | 677,4 ± 755,4\* | 518,3 | 335,4 ± 514,1 | 70,5 | 13,8 | 53,1 | 425k |
+| `gamma_0p999` | 203,3 ± 187,3 | 141,5 | 242,9 ± 130,9 | 185,3 | 141,5 | 48,1 | 381k |
+| `n_step_5` | 204,7 ± 88,9 | 156,7 | 243,9 ± 159,7 | 219,6 | 46,4 | 57,9 | 439k |
+| `epsilon_decay_steps_100000` | 363,4 ± 183,6 | 440,5 | 233,1 ± 191,4 | 200,7 | 56,5 | 56,8 | 313k |
+| **`baseline`** | **442,2 ± 372,5** | **192,2** | **173,2 ± 96,3** | **186,2** | **30,4** | **57,3** | **395k** |
+| `gamma_0p95` | 356,9 ± 507,4 | 143,3 | 169,4 ± 73,9 | 165,2 | 77,3 | 60,4 | 432k |
+| `learning_rate_5em05` | 183,6 ± 54,8 | 184,5 | 155,3 ± 96,6 | 162,3 | 63,5 | 44,1 | 508k |
+| `target_update_interval_4000` | 464,1 ± 489,3\* | 190,2 | 96,4 ± 56,3 | 74,8 | 49,7 | 58,5 | 400k |
+| `hidden_64x64` | 101,3 ± 101,9 | 58,2 | 84,7 ± 100,0 | 58,2 | 0,0 | 28,8 | 606k |
+| Zufall | 0,0 | 0,0 | 0,0 | 0,0 | 0,0 | — | nie |
+
+\* mindestens ein Seed lief ins 200.000-Frame-Limit; dieser Wert ist eine
+**Untergrenze** (Einzelheiten weiter unten). „bis 10" ist der Median der
+Schritte bis zum gleitenden Trainings-Score 10, „schlecht. Seed" der schwächste
+der fünf Seeds beim letzten Checkpoint — die Zahl, die zählt, wenn man wissen
+will, wie schlecht ein Lauf ausfallen kann.
+
+#### Signifikanz gegen `baseline`
+
+Exakter Permutationstest über die 5 Seeds; 0,008 ist der kleinstmögliche Wert.
+
+| Variante | bester CP | letzter CP | bis 5 | bis 10 |
+| --- | --- | --- | --- | --- |
+| `hidden_512x512` | 0,84 | **0,008** | 0,056 | **0,008** (schneller) |
+| `target_update_interval_250` | 0,22 | **0,032** | 0,42 | 0,31 |
+| `epsilon_decay_steps_100000` | 1,0 | 0,69 | **0,032** (schneller) | **0,008** (schneller) |
+| `epsilon_decay_steps_400000` | 1,0 | 0,55 | **0,008** (langsamer) | **0,008** (langsamer) |
+| `learning_rate_0p0003` | 0,69 | 0,42 | **0,032** (schneller) | **0,016** (schneller) |
+| `learning_rate_5em05` | 0,31 | 0,84 | **0,032** (langsamer) | **0,008** (langsamer) |
+| `n_step_1` | 0,84 | 0,55 | 0,69 | **0,032** (langsamer) |
+| `n_step_5` | 0,22 | 0,55 | 0,22 | 0,095 |
+| `gamma_0p95` | 0,15 | 0,69 | 0,55 | 0,15 |
+| `gamma_0p999` | 0,095 | 0,84 | 0,69 | 0,42 |
+| `target_update_interval_4000` | 1,0 | 0,31 | 0,84 | 0,84 |
+| `hidden_64x64` | 0,056 | 0,31 | — | — |
+
+**Zur Einordnung der p-Werte:** Bei 12 Varianten gegen dieselbe Basis müsste eine
+strenge Holm-Korrektur den kleinsten p-Wert unter 0,05 ÷ 12 = 0,004 drücken. Das
+ist bei 5 gegen 5 Seeds **konstruktionsbedingt unerreichbar** — 0,008 ist die
+Untergrenze. Kein Befund dieser Studie kann also allein über einen p-Wert
+getragen werden. Was ihn trägt, ist Übereinstimmung über mehrere Messungen und
+Monotonie über die drei Werte eines Parameters.
+
+#### Was die Parameter-Studie zeigt
+
+**1. Kein Parameter hebt die Spitzenleistung.** Beim besten Checkpoint ist
+**keine** Variante von der Basis zu trennen (kleinster p-Wert 0,056, und der
+gehört dem Verlierer `hidden_64x64`). Der Grund steht in den Seed-Spalten: Die
+Basis erreicht 165 · 187 · 192 · 684 · 983 — zwei Glücks-Seeds tragen den
+Mittelwert von 442, der Median liegt bei 192. Bei solchen Verteilungen kann ein
+Test über 5 Seeds nichts nachweisen. **Der Endscore des besten Checkpoints ist
+in dieser Studie die schwächste aller Messungen**, genau umgekehrt zur Intuition.
+
+**2. Zwei Parameter verbessern die Stabilität — und nur die.** `hidden`
+512×512 und `target_update_interval` 250 gewinnen beim **letzten** Checkpoint,
+beide mit klarem Abstand und beide auch im Median und im schlechtesten Seed:
+
+> ⚠️ **Dieser Befund ist widerlegt.** Der finale Lauf auf den Seeds 100 – 104 hat
+> ihn nicht bestätigt, sondern umgekehrt: Dort gewinnt die ungetunte Basis mit
+> Median 504,5 gegen 289,2, und der schlechteste Seed steht bei 48,3 gegen 13,6
+> (8.9). Der Abschnitt bleibt unverändert stehen, weil er korrekt berichtet, was
+> auf den Seeds 0 – 4 gemessen wurde — und weil der Vergleich mit 8.9 den
+> eigentlichen Lehrsatz trägt: **Monotonie über drei Werte schützt nicht vor
+> Überanpassung an den Auswahl-Seed-Satz.** Alles Folgende dieses Befundes ist
+> unter diesem Vorbehalt zu lesen.
+
+| | letzter CP, Median | schlechtester Seed |
+| --- | --- | --- |
+| `target_update_interval` 250 / **1.000** / 4.000 | 661,7 / **186,2** / 74,8 | 206,1 / **30,4** / 49,7 |
+| `hidden` 64×64 / **256×256** / 512×512 | 58,2 / **186,2** / 558,1 | 0,0 / **30,4** / 279,3 |
+
+Beide Reihen sind **monoton über alle drei Werte** — das ist das eigentliche
+Argument, nicht der p-Wert. Bei `hidden_512x512` liegt zudem jeder der fünf
+Seeds über jedem Basis-Seed (279 gegen höchstens 266).
+
+Die Deutung ist bei beiden dieselbe und passt zur bekannten Oszillation aus 8.2:
+Die Parameter heben nicht die Decke, sondern den Boden. Häufigere
+Target-Kopien und ein größeres Netz verhindern, dass die Policy nach einer guten
+Phase wieder einbricht. Wer bei 1M Schritten einfach stoppt — und das tut man im
+Normalfall —, bekommt dadurch das Drei- bis Vierfache.
+
+**Der Gegenpol bestätigt es:** `target_update_interval` 4.000 ist beim letzten
+Checkpoint die **schlechteste** Variante der ganzen Studie (Median 74,8), obwohl
+ihr bester Checkpoint mit 464 über der Basis liegt. Ein veraltetes Target macht
+gute Phasen nicht unmöglich, nur flüchtig.
+
+**3. Die Explorationsdauer muss zum Reward passen — auf der Zeitachse.** Das war
+die offene Frage aus 11.4, und sie hat eine klare Antwort:
+
+| `epsilon_decay_steps` | bis Score 5 | bis Score 10 | Endscore |
+| --- | --- | --- | --- |
+| 100.000 | **254k** (p = 0,032) | **313k** (p = 0,008) | kein Unterschied |
+| **200.000** | **320k** | **395k** | — |
+| 400.000 | 467k (p = 0,008) | 518k (p = 0,008) | kein Unterschied |
+
+Alle Schwellenwerte sind Mediane über die fünf Seeds, wie in 8.6. (`significance.py`
+rechnet intern mit Mittelwerten und zeigt deshalb leicht andere Zahlen; die
+p-Werte stammen ohnehin aus den Einzelwerten je Seed, nicht aus diesen Lagemaßen.)
+
+Streng monoton, an beiden Enden signifikant, und bei „bis 10" überlappen die
+Seed-Spannen der drei Werte **überhaupt nicht** (268–321 / 352–421 / 493–550).
+Unter `shaped` lässt sich die Explorationsphase also **halbieren, ohne etwas zu
+verlieren** — das Lernen wird rund 20 % schneller, die Endqualität bleibt
+gleich. Die 200.000 Schritte waren für `legacy` eingestellt (Abschnitt 7), wo
+der Agent die erste Röhre erst spät zuverlässig nahm. `shaped` braucht diese
+Zeit nicht mehr.
+
+Das ist der vorhergesagte Befund aus 11.4, aber auf der Geschwindigkeits-, nicht
+auf der Qualitätsachse. Der hohe Mittelwert von 400k (1.111) ist kein
+Gegenargument: Er stammt aus zwei Seeds (2.091 und 2.605), ist zensiert, und
+derselbe Arm hat beim letzten Checkpoint den zweitschlechtesten Median der Studie.
+
+**4. Die Lernrate wirkt ausschließlich auf die Geschwindigkeit.** 3e-4 → 304k,
+1e-4 → 395k, 5e-5 → 508k bis Score 10; beide Enden signifikant, monoton, und am
+Endscore ändert sich nichts (p = 0,69 und 0,31). Die Erwartung aus 11.4, 3e-4
+werde instabil, ist **widerlegt** — die höhere Rate lernt schneller und endet
+gleich gut. Ein Hinweis, dass in dieser Umgebung noch Luft nach oben ist; die
+Studie hat 1e-3 nicht getestet.
+
+**5. Der Wert von n-step hängt am Reward-Schema.** Unter `legacy` war n-step in
+der Ablation der **größte Einzelbeitrag** (8.5: Verlauf 38 gegen 15 ohne).
+Unter `shaped` ist n = 1 nur noch geringfügig langsamer (425k gegen 395k,
+p = 0,032) und sonst nicht zu unterscheiden.
+
+Das ist der schönste Querbezug zwischen den beiden Studien: n-step transportiert
+Belohnung über die ~50 Frames Vorlauf bis zur ersten Röhre (8.1) — aber genau
+diese Lücke füllt das Shaping ohnehin, indem es jeden Schritt in Richtung
+Lückenmitte sofort bewertet. **Zwei Mechanismen für dasselbe Problem; wer einen
+hat, braucht den anderen kaum noch.** Die Hypothese aus 11.4 hat das
+vorhergesagt.
+
+n = 3 bleibt trotzdem die Basis: Es ist in keiner Messung schlechter, und es
+hält die Konfiguration über alle Studien hinweg stabil.
+
+**6. `gamma` 0,99 ist bestätigt — durch Abwesenheit.** Weder 0,95 noch 0,999
+schlägt die Basis in irgendeiner Messung. 0,999 hat den niedrigsten Verlauf der
+ganzen Studie (48,1 gegen 57,3), 0,95 ist langsamer (432k gegen 395k, nicht
+signifikant). Kein Ergebnis ist hier ein Ergebnis: Der Standardwert ist gut
+gewählt und der Shaping-Diskont folgt ihm korrekt (6.6).
+
+**7. `hidden` 64×64 ist der einzige klare Verlierer.** Median 58 statt 192,
+ein Seed lernt in 1M Schritten **überhaupt nichts** (Score 0,0, erreicht Score 10
+nie), die Flap-Rate liegt mit 0,095 als einzige deutlich über allen anderen
+(0,061 – 0,079). Damit ist die Hoffnung aus 11.4 erledigt, mit einem kleineren
+Netz alle künftigen Experimente zu beschleunigen. 12 Eingangsdimensionen heißt
+eben nicht, dass 64 Neuronen reichen — die Q-Funktion, nicht die Eingabe, ist
+das Komplizierte.
+
+**8. Das große Netz kostet das Doppelte.** `hidden_512x512` brauchte 137,8 min
+je Lauf, die 256×256-Läufe derselben Belegung 68,4 min. Das ist der Preis für
+den Stabilitätsgewinn aus Befund 2 und die einzige Zahl der Studie, bei der
+Aufwand gegen Nutzen abzuwägen ist.
+
+#### Drei Grenzen der Messung
+
+**Die Zensur ist zurück.** Bei 200.000 Frames liefen acht Lauf-Messungen ins
+Limit, die schlimmste (`epsilon_decay_steps_400000_seed1`) in 16,7 % der
+Episoden. Deren Scores sind Untergrenzen, in der Tabelle mit \* markiert. Die
+Vorhersage in 12.7 („Parameter-Studie, erwartet: keine Zensur") war **falsch** —
+die getunten Agenten sind deutlich besser geworden als die der Reward-Studie.
+Für den finalen Lauf gilt deshalb 500.000 (12.4), und die Prüfung bleibt:
+`truncation_rate` muss 0 sein.
+
+**Der Greedy-Verlauf trennt nur noch nach unten.** Er erkennt die Verlierer
+weiterhin zuverlässig — `hidden_64x64` 28,8, `learning_rate_5em05` 44,1,
+`gamma_0p999` 48,1. Aber die oberen neun Varianten liegen alle zwischen 53,1 und
+62,5, dicht unter der Decke des Trainingslimits von ~79 Röhren (6.4), und dort
+trennt er nichts mehr: Die beiden Gewinner aus Befund 2 liegen mit 57,7 und 60,9
+neben der Basis mit 57,3. In der Ablation war diese Messung das stärkste
+Werkzeug (9,7 bis 38,5 bei `legacy`, weit unter der Decke). Unter `shaped` ist
+sie nur noch ein Verlierer-Detektor — eine Eigenschaft gedeckelter Metriken, kein
+Fehler: Wo alle Varianten gut sind, misst eine gedeckelte Skala nichts mehr.
+
+**Die Lerngeschwindigkeit war die einzig verlässliche Messung.** Ihre
+Seed-Spannen sind eng (jede Variante innerhalb von ~10 %), während die
+Endscore-Spannen um den Faktor 6 bis 20 streuen. Jeder belastbare Befund dieser
+Studie außer Nr. 2 kommt aus `steps_to_<n>`. Das bestätigt 10.1 nachdrücklich:
+`steps_to_<n>` ist nicht nur die gemeinsame Währung über die vier Verfahren,
+sondern in dieser Umgebung schlicht die genauere Messung.
+
+#### Reproduzierbarkeit — zum zweiten Mal kostenlos bestätigt
+
+Die `baseline`-Läufe dieser Studie haben dieselbe Trainingskonfiguration wie die
+`shaped`-Läufe der Reward-Studie (8.6). Ihre `train.csv` sind **Byte für Byte
+identisch**, für alle fünf Seeds — geprüft mit `cmp`.
+
+Das wiegt mehr als die erste Bestätigung in 8.6, denn zwischen den beiden Läufen
+liegen ein **Refactoring** des Pakets (Commit `3d7ae0f`, gemeinsame
+`rollout`-Funktion und CLI-Definitionen) und ein **Stromausfall** mit
+anschließendem Neustart. Beides hat an keinem einzigen Trainingsschritt etwas
+geändert. Die einzigen Unterschiede in der `config.json` sind
+`eval_max_episode_steps` (50.000 gegen 200.000, betrifft nur das Messen) und
+`reward_overrides` (`None` gegen `{}`, eine Schema-Änderung aus dem Refactoring).
+
+#### Zwei der fünf Schwellen sind tot
+
+`steps_to_25` und `steps_to_50` haben in **keinem einzigen der 140 Läufe** aller
+Studien je einen Wert geliefert — auch nicht im finalen Lauf (8.9). Der Grund ist die Restexploration: Bei
+ε = 0,01 und rund 37,7 Frames je Röhre braucht Score 25 etwa 940 Frames, in denen
+im Mittel neun Zufallsaktionen fallen — eine genügt zum Tod (8.2). Der höchste
+gleitende Trainings-Score, den überhaupt ein Lauf erreicht hat, liegt bei 17,8;
+der Median über die 65 Läufe der Parameter-Studie bei 13,2.
+
+Nutzbar sind damit nur `steps_to_1`, `steps_to_5` und `steps_to_10`. Das ist
+kein Schaden — die drei genügen und haben in dieser Studie die Arbeit gemacht —
+aber es hat eine Folge für den Verfahrensvergleich, siehe 10.1.
+
+#### Abgleich mit den Hypothesen aus 11.4
+
+| Hypothese vor den Läufen | Ergebnis |
+| --- | --- |
+| `gamma` 0,99 am besten | **bestätigt** — kein Wert schlägt sie |
+| `learning_rate` 1e-4 am besten, 3e-4 instabil | **widerlegt** — 3e-4 lernt schneller und endet gleich gut |
+| `n_step` 3 oder 5 am besten | **bestätigt** für 3; 5 ist tendenziell langsamer |
+| unter `shaped` ist n-step weniger wichtig als unter `legacy` | **bestätigt** — größter Einzelbeitrag dort, marginal hier |
+| `target_update_interval`: mittlerer Wert am besten | **widerlegt** — 250 ist besser, und zwar monoton |
+| `epsilon_decay_steps`: 100k als Beleg, dass Exploration zum Reward passen muss | **bestätigt**, auf der Geschwindigkeitsachse (20 % schneller, gleiche Qualität) |
+| `hidden`: wenig Unterschied, 64×64 hält mit | **widerlegt in beide Richtungen** — 64×64 fällt stark ab, 512×512 gewinnt deutlich |
+| Alle Varianten gleichauf ⇒ Standardwerte sind gut genug | **teilweise** — am Endscore ja, an Stabilität und Tempo nein |
+
+Bemerkenswert: Von acht Vorhersagen sind vier widerlegt. Die beiden Gewinner
+(`target_update_interval` 250, `hidden` 512×512) waren beide **nicht**
+vorhergesagt, und beide wurden ursprünglich als die zwei *unwichtigsten*
+Parameter aus dem ersten 45-Lauf-Durchgang ausgeschlossen (12.3). Sie wurden nur
+deshalb gefunden, weil das Raster später vervollständigt wurde.
+
+#### Konsequenz für den finalen Lauf
+
+> ⚠️ **Nachtrag nach 8.9:** Diese Entscheidung wurde getroffen, der finale Lauf
+> ist gelaufen — und er hat sie **verworfen**. Die Konfiguration des Projekts
+> bleibt die aus Abschnitt 7 (256×256, Target 1.000). Der folgende Absatz
+> dokumentiert die Begründung, wie sie **vor** dem Lauf lautete.
+
+Übernommen werden `hidden` 512×512 und `target_update_interval` 250 — die
+beiden Änderungen, die in mehreren Messungen **und** monoton über drei Werte
+bestehen. Nicht übernommen werden die reinen Geschwindigkeitsgewinne
+(`epsilon_decay_steps` 100.000, `learning_rate` 3e-4): Bei einem festen Budget
+von 1.000.000 Schritten ist schneller Lernen kein Qualitätsgewinn, und jede
+weitere Änderung vergrößert das Risiko einer unerkannten Wechselwirkung.
+
+Denn das ist die Grenze des Aufbaus „ein Parameter je Variante": Dass die beiden
+Gewinner **zusammen** wirken, ist nicht gemessen. Beide verbessern dieselbe
+Größe — die Stabilität — und könnten sich überschneiden. Der finale Lauf prüft
+das deshalb mit drei Armen (12.4).
+
+#### Eine Altlast, die diese Studie sichtbar macht
+
+Befund 5 sagt: Der Wert von n-step hängt am Reward-Schema. Damit steht eine
+Frage im Raum, die bisher niemand gestellt hat — denn **die gesamte
+Algorithmus-Konfiguration wurde unter `legacy` ausgewählt** (Ablation, 8.5) und
+läuft seit der Reward-Studie unter `shaped`.
+
+Das ist nicht bloß formal. Die Begründungen aus Abschnitt 6 und 11.1 stützen sich
+ausdrücklich auf den **dichten Überlebensbonus**:
+
+| Baustein | Begründung | Gilt sie unter `shaped`? |
+| --- | --- | --- |
+| Double DQN | „Der dichte Alive-Reward macht die Q-Werte groß, die Überschätzung durch den Max-Operator ist deshalb relevant" (11.1) | **Nein** — `shaped` hat `alive = 0,0` |
+| Huber-Loss (6.1) | „0,1 ÷ (1 − 0,99) = 10, MSE plus große TD-Fehler zerlegt das Netz" | **Nein** — dieselbe Rechnung ergibt unter `shaped` einen viel kleineren Wert |
+| Dueling | brachte schon unter `legacy` nichts Messbares (8.5), wurde nur behalten, weil es nicht schadet | unverändert fraglich |
+| n-step 3 | größter Einzelbeitrag unter `legacy` | **widerlegt für `shaped`** (Befund 5) |
+
+Bei n-step ist das messbar eingetreten. Bei Double DQN und Huber-Loss ist es
+bisher nur ein Argument: Beide *schaden* nach allem, was vorliegt, nicht, und
+Huber-Loss ist ohnehin die konservative Wahl. Aber die Sätze in 6.1 und 11.1
+begründen sie mit einer Größe, die im aktuell genutzten Schema **null** ist.
+
+**Was daraus folgt — und was nicht.** Der finale Lauf wird deswegen nicht
+verschoben: Es gibt keinen Hinweis, dass einer der Bausteine unter `shaped`
+schadet, und eine Ablation unter `shaped` (3 Varianten × 5 Seeds ≈ 2,5 Stunden)
+würde die Konfiguration bestenfalls vereinfachen, nicht verbessern. Für die
+Präsentation gehört der Punkt aber genannt: *„Unsere Bausteine haben wir unter
+dem alten Belohnungsschema ausgewählt; für n-step konnten wir zeigen, dass diese
+Wahl schemaabhängig ist — für die übrigen haben wir es nicht nachgeprüft."*
+Das ist ehrlicher und interessanter als die Behauptung, die Konfiguration sei
+durchgängig validiert.
+
+Der allgemeine Satz dahinter ist das eigentliche Ergebnis der drei Studien
+zusammen: **Algorithmus-Bausteine und Hyperparameter sind nicht unabhängig vom
+Belohnungsschema zu wählen.** Wer das Schema wechselt, muss beides neu prüfen.
+Genau deshalb darf die hier gefundene Konfiguration auch nicht ungeprüft in einen
+`legacy`-Vergleich übernommen werden (12.8).
+
+### 8.8 Durchsatz
 
 | Aufbau | pro Lauf | gesamt |
 | --- | --- | --- |
@@ -752,6 +1120,151 @@ vierfachen Gesamtdurchsatz — für dieselbe Zeit, die der einzelne 2M-Lauf
 brauchte, bekommt man neun Läufe über je 300.000 Schritte.
 
 ---
+
+### 8.9 Finaler Lauf auf neuen Seeds — das Tuning hält nicht
+
+3 Arme × Seeds 100 – 104 = **15 Läufe**, je 1.000.000 Schritte, Reward `shaped`,
+Messlimit 500.000 Frames. Aufbau und Begründung in 12.4. Endmessung mit
+`summarize.py`: bester Checkpoint über 50 gepaarte Episoden, letzter über 30
+(Evaluations-Seed 90.000). Grafik: `runs/final_dqn/final.png`.
+
+Die Frage, für die dieser Lauf gebaut wurde: **Hält der Tuning-Gewinn aus 8.7 auf
+Seeds, die bei der Auswahl keine Rolle gespielt haben?**
+
+Die Antwort ist nein.
+
+#### Ergebnis
+
+| Arm | `hidden` | Target | bester CP Ø | Median | letzter CP Ø | **Median** | schlecht. Seed | bis 10 | min/Lauf |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| **`baseline`** | 256×256 | 1.000 | 440,3 ± 351,8 | 359,6 | **488,7 ± 408,7** | **504,5** | **48,3** | 380k | **42,4** |
+| `hidden_256x256` | 256×256 | 250 | 380,0 ± 151,5 | 384,0 | 248,8 ± 93,0 | 228,3 | 142,0 | 372k | 75,8 |
+| `hidden_512x512` | 512×512 | 250 | 930,8 ± 1.415,5\* | 289,2 | 259,3 ± 188,5 | 289,2 | 13,6 | **312k** | 149,5 |
+| Zufall | — | — | 0,0 | 0,0 | 0,0 | 0,0 | 0,0 | nie | — |
+
+\* `hidden_512x512_seed102` lief beim besten Checkpoint in 3,3 % der Episoden ins
+500.000-Frame-Limit; sein Wert (3.447,7) ist eine Untergrenze und trägt den
+Mittelwert des Arms fast allein. **Beim letzten Checkpoint ist die
+`truncation_rate` in allen drei Armen 0,000** — die entscheidende Messung ist
+zensurfrei.
+
+Die ungetunte Basis gewinnt beim letzten Checkpoint, auf dem Median um Faktor
+1,8. Die Einzelwerte:
+
+| Arm | Seeds (letzter Checkpoint) |
+| --- | --- |
+| `baseline` | 48 · 223 · **504** · 547 · 1.121 |
+| `hidden_256x256` | 142 · 198 · **228** · 292 · 384 |
+| `hidden_512x512` | 14 · 163 · **289** · 309 · 522 |
+
+#### Signifikanz gegen `baseline`
+
+```powershell
+python -m flappy_bird_gymnasium.dqn.significance runs/final_dqn --baseline baseline
+python -m flappy_bird_gymnasium.dqn.significance runs/final_dqn --baseline baseline --file evaluations_latest.csv
+```
+
+| Variante | bester CP | letzter CP | bis 5 | bis 10 |
+| --- | --- | --- | --- | --- |
+| `hidden_512x512` | 1,0 | 0,42 | 0,42 | **0,032** (schneller) |
+| `hidden_256x256` | 1,0 | 0,42 | 1,0 | 0,84 |
+
+p = 0,42 heißt: Das Tuning ist auch nicht nachweisbar *schlechter*. Nachweisbar
+**besser** ist es aber in keiner einzigen Score-Messung — und genau das war die
+Behauptung.
+
+#### Der Befund aus 8.7 kehrt sich um
+
+Verglichen wird dieselbe Messung — letzter Checkpoint, `summarize.py`, 30
+gepaarte Episoden — einmal auf den Auswahl-Seeds, einmal auf den neuen.
+
+| Form des Befunds | Seeds 0 – 4 (8.7) | Seeds 100 – 104 | |
+| --- | --- | --- | --- |
+| Median getunt / Basis | 558,1 / 186,2 = **3,00** | 289,2 / 504,5 = **0,57** | umgekehrt |
+| Ø getunt / Basis | 783,2 / 173,2 = **4,52** | 259,3 / 488,7 = **0,53** | umgekehrt |
+| schlechtester Seed | 279,3 gegen 30,4 | **13,6 gegen 48,3** | umgekehrt |
+| p-Wert | **0,008** | 0,42 | weg |
+
+Auch das Nebenargument fällt: Die Flap-Rate der getunten Policy liegt beim
+letzten Checkpoint bei 0,092 gegen 0,068 bei der Basis. Nach 8.5, Befund 7
+flattern *bessere* Varianten sparsamer.
+
+#### Warum: es gab nichts zu reparieren
+
+Das Tuning sollte den Einbruch zwischen bestem und letztem Checkpoint verhindern
+— den „Boden anheben" (8.7, Befund 2). Auf den neuen Seeds tritt dieser Einbruch
+bei der Basis gar nicht auf:
+
+| | bester CP Ø | letzter CP Ø | |
+| --- | --- | --- | --- |
+| `baseline`, Seeds 0 – 4 (8.7) | 442,2 | 173,2 | **−61 %** |
+| `baseline`, Seeds 100 – 104 | 440,3 | 488,7 | **+11 %** |
+
+Die Basis-Konfiguration ist auf beiden Seed-Sätzen beim besten Checkpoint
+praktisch identisch (442,2 gegen 440,3 — eine bemerkenswert genaue Replikation).
+Was sich unterscheidet, ist allein, ob sie bei 1M Schritten gerade in einer guten
+oder einer schlechten Phase steht. **Der Einbruch war eine Eigenschaft der Seeds
+0 – 4, nicht der Konfiguration.** Das Tuning hat ein Problem behoben, das nur in
+der Stichprobe existierte, auf der es ausgewählt wurde.
+
+Das ist Überanpassung an den Auswahldatensatz, im Lehrbuchfall. Bei zwölf
+Varianten gegen dieselbe Basis und 0,008 als kleinstmöglichem p-Wert ist ein
+Treffer auf diesem Niveau genau das, was der Zufall liefert — 12.4 hat den Fall
+vor dem Lauf beschrieben, und er ist eingetreten.
+
+#### Was überlebt
+
+**Die Lerngeschwindigkeit des großen Netzes — als Einziges.** `steps_to_10`
+312k gegen 380k (Mediane), p = 0,032. In 8.7 waren es 331k gegen 395k bei
+p = 0,008: gleiche Richtung, gleiche Größenordnung, zweimal unabhängig gemessen
+auf getrennten Seed-Sätzen. Das ist der einzige replizierte Tuning-Effekt des
+Projekts.
+
+Er rechtfertigt das Netz trotzdem nicht: **149,5 gegen 75,8 Minuten je Lauf** —
+beide Arme aus demselben Aufruf, also nach 9.8 vergleichbar. 18 % weniger
+Schritte für 100 % mehr Rechenzeit, bei gleichem Endergebnis. Auf einem
+Wandzeit-Budget (10.4) verliert 512×512.
+
+`target_update_interval` 250 zeigt in **keiner** Messung mehr etwas: Score
+p = 0,42, `steps_to_10` p = 0,84, Median unter der Basis.
+
+#### Konsequenz
+
+**Die Konfiguration aus Abschnitt 7 bleibt unverändert die des Projekts.**
+`hidden` 256×256 und `target_update_interval` 1.000 werden nicht ersetzt. Der
+finale Agent ist die `baseline`-Konfiguration unter Reward `shaped` — sie ist
+zugleich die schnellste (42,4 min gegen 149,5) und die einfachste.
+
+Die Endzahl der Präsentation, gemessen auf Seeds, die an keiner Auswahl beteiligt
+waren, zensurfrei:
+
+> **Ø 488,7 ± 408,7 Röhren**, Median 504,5, Spanne 48,3 – 1.121,1, über 5 Seeds
+> beim letzten Checkpoint. Bester Checkpoint: Ø 440,3 ± 351,8, Median 359,6.
+> Zufallsreferenz: 0,00.
+
+Der Mittelwert ist hier die ehrlichere Zahl als in den Vorstudien, weil die
+Verteilung weniger schief ist — trotzdem gehört die Streuung immer dazu.
+
+#### Was daraus methodisch folgt
+
+**Monotonie über drei Werte hat eine Überanpassung nicht verhindert.** Das war
+in 8.7 das tragende Argument („nicht der p-Wert, sondern die Monotonie"), und es
+war nicht falsch — aber es war nicht ausreichend. Beide Parameter waren monoton,
+in mehreren Messungen konsistent, und beide halten auf neuen Seeds nicht.
+
+Der einzige Schutz, der funktioniert hat, ist der gehaltene Seed-Satz selbst
+(Regel 6). Er hat aus einer Behauptung, die in die Präsentation gegangen wäre,
+ein geprüftes — und verworfenes — Ergebnis gemacht. Das ist der stärkste
+methodische Befund des Projekts und gehört in die Präsentation.
+
+#### Abgleich mit den Hypothesen aus 12.4
+
+| Erwartung vor dem Lauf | Ergebnis |
+| --- | --- |
+| Der Tuning-Gewinn hält auf neuen Seeds | **widerlegt** — er kehrt sich um |
+| Fällt er negativ aus, war 8.7 ein Zufallstreffer aus zwölf Vergleichen | **eingetreten**, wie in 12.4 beschrieben |
+| Liegen `hidden_256x256` und `hidden_512x512` gleichauf, kommt alles von Target 250 | **gegenstandslos** — beide liegen unter der Basis (p = 0,91 untereinander) |
+| Das doppelt so teure Netz lohnt sich nicht | **bestätigt**, aus anderem Grund als erwartet |
 
 ## 9. Eigene Fehler und was daraus folgt
 
@@ -832,6 +1345,72 @@ statt ihn nachträglich wegzuerklären.
 *Folge:* Kurze Pilotläufe taugen, um Fehler zu finden, nicht, um Varianten
 auszusortieren. Vergleiche laufen über das volle Budget.
 
+### 9.8 Die Wandzeit einer Variante war kein Messwert
+
+In der Parameter-Studie steht `epsilon_decay_steps_400000` mit 50,3 Minuten je
+Lauf da, die Basis mit 101,8 — scheinbar doppelt so schnell, bei identischer
+Netzgröße und identischer Schrittzahl. Das ist reine Belegung: 45 Läufe auf 13
+Prozessen sind drei volle Durchgänge plus einen mit nur sechs Läufen, und diese
+sechs hatten die Maschine fast für sich. Alle fünf 400k-Seeds landeten dort
+(49,3 · 49,4 · 50,3 · 50,8 · 51,7 min), bei `epsilon_decay_steps_100000` erwischte
+es genau einen Seed (52,6 gegen 97,1 · 97,5 · 97,5 · 98,8).
+
+Die Spalte `minutes` misst also, **wann** ein Lauf an der Reihe war, nicht was er
+kostet. Vergleichbar ist sie nur zwischen Läufen aus demselben Durchgang — die
+einzige belastbare Aussage der Studie ist deshalb 137,8 gegen 68,4 Minuten für
+512×512 gegen 256×256, weil beide Arme in ihrem eigenen 10-Lauf-Aufruf liefen.
+
+*Folge:* Wandzeit nie aus einer parallel gefahrenen Studie als Eigenschaft einer
+Variante berichten. Wer Rechenkosten vergleichen will, misst sie in einem
+eigenen Lauf bei fester Belegung — oder vergleicht nur innerhalb eines
+Durchgangs. Für die Budget-Frage aus 10.4 ist das unmittelbar relevant: Eine
+Wandzeit-Definition über die vier Verfahren ist nur dann fair, wenn alle vier
+unter derselben Belegung gemessen werden.
+
+### 9.9 Die Zwischenmetrik wuchs nicht mit den Agenten
+
+`quick_eval` misst bewusst am **Trainings**limit von 3.000 Frames (≈ 79 Röhren),
+damit die Zwischenevaluation nicht teurer wird als das Training selbst. Das war
+in der Ablation richtig: Dort lag der Greedy-Verlauf zwischen 9,7 und 38,5, weit
+unter der Decke, und war das **stärkste** Werkzeug der Studie.
+
+Mit besseren Agenten kippte das. Über alle Läufe von Reward-, Parameter- und
+finaler Studie liegt die `truncation_rate` bei der Checkpoint-Auswahl zwischen
+0,26 und 0,90 — die Hälfte bis neun Zehntel aller Evaluationsepisoden werden
+abgeschnitten. Zwei Folgen:
+
+1. **Der Greedy-Verlauf wurde vom Trennwerkzeug zum Verlierer-Detektor.** In 8.7
+   liegen die oberen neun Varianten zwischen 53,1 und 62,5 — er erkennt
+   `hidden_64x64` (28,8) zuverlässig, unterscheidet oben aber nichts mehr. Das
+   steht in 8.7 bereits als „Grenze der Messung".
+2. **Die Auswahl von `best.pt` verlor ihre Auflösung.** Der Checkpoint wird über
+   den Mittelwert der letzten drei Evaluationen gewählt — eine bewusste und
+   richtige Entscheidung gegen Rausch-Auswahl, im Code begründet. Aber Glättung
+   hilft gegen Rauschen, nicht gegen eine Decke: Wenn alle späten Checkpoints
+   79 melden, ist keiner mehr als der beste erkennbar. Eine Policy, die 300
+   Röhren wert ist, und eine, die 3.000 wert ist, sehen identisch aus.
+
+Das erklärt nachträglich, warum die Spalte „bester Checkpoint" in der
+Parameter-Studie **keine einzige** Variante trennen konnte (8.7, Befund 1) und
+warum ihre Seed-Spannen um Faktor 6 bis 20 streuen: Was dort verglichen wird,
+ist nicht der beste Checkpoint einer Variante, sondern ein beliebiger später.
+
+**Wichtig für die Einordnung:** Das erzeugt **Varianz, keine Verzerrung**. Die
+Auswahl trifft jede Variante gleich, und die Messung selbst (`summarize.py`)
+läuft am hohen Limit und ist korrekt. Die Vergleiche bleiben fair — nur sind die
+Fehlerbalken größer, als die Spaltenüberschrift vermuten lässt. Betroffen ist
+allein die Best-Checkpoint-Spalte; `steps_to_<n>` wird auf Trainingsepisoden
+gemessen, wo der Deckel bei ε = 0,01 nie greift (höchster je erreichter
+gleitender Trainings-Score: 17,8), und ist vollständig unberührt.
+
+*Folge:* `quick_eval` braucht ein eigenes, höheres Limit — 15.000 bis 20.000
+Frames hätten Kopffreiheit bis 400 bzw. 530 Röhren gegeben und kosten nur bei
+den wenigen starken Läufen überhaupt etwas. Und allgemeiner: **Ein Messlimit ist
+eine Annahme über das Können des Agenten. Wird der Agent besser, muss das Limit
+mitwachsen — sonst misst man irgendwann nur noch das Limit.** Dieselbe Lehre
+steht in 9.3 und 12.7 für das *Mess*limit; sie gilt für die Zwischenevaluation
+genauso, und dort ist sie zweimal übersehen worden.
+
 ---
 
 ## 10. Methodik für die Endauswertung
@@ -843,12 +1422,33 @@ Vier Lernverfahren sollen verglichen werden: **PPO, DQN, Q-Learning und CNN.**
 | Metrik | Aussage | Grenze |
 | --- | --- | --- |
 | **Score** | was die fertige Policy kann | wird vom Frame-Limit zensiert |
-| **`steps_to_<n>`** | wie schnell gelernt wurde | nicht zensierbar — gemeinsame Währung über alle vier Verfahren |
+| **`steps_to_<n>`** | wie schnell gelernt wurde | nicht zensierbar, aber an die Explorationsrate gekoppelt — siehe unten |
 | **Return** | das Optimierungsziel des Agenten | **nur innerhalb desselben Reward-Schemas vergleichbar** |
 
 `steps_to_<n>` ist die Zahl der Umgebungsschritte, bis der gleitende Score über
 20 Episoden ein Niveau erstmals hielt. Der gleitende Mittelwert verhindert, dass
 eine einzelne Glücksepisode als „erreicht" zählt.
+
+**Einschränkung, die vor dem Verfahrensvergleich geklärt werden muss.** Diese
+Metrik wird auf den **Trainings**-Episoden gemessen, also mit eingeschalteter
+Exploration. Für DQN heißt das ε = 0,01, und das deckelt den Trainings-Score
+strukturell: In 140 Läufen hat **kein einziger** je `steps_to_25` erreicht
+(8.7, 8.9). Zwei Konsequenzen für den Vergleich mit PPO, Q-Learning und CNN:
+
+1. **Nur Schwellen verwenden, die alle vier Verfahren erreichen können.** Für
+   DQN sind das 1, 5 und 10. Höhere Schwellen sind keine „schwierigeren
+   Messpunkte", sondern für DQN schlicht undefiniert.
+2. **Die Deckelung ist je Verfahren verschieden.** PPO sampelt aus einer
+   stochastischen Policy, Q-Learning hat seinen eigenen ε-Zeitplan. Wie stark
+   der Trainings-Score gedeckelt ist, hängt also vom Verfahren ab — ein
+   Unterschied in `steps_to_10` kann daher auch ein Unterschied in der
+   Explorationsrate sein statt in der Lerngeschwindigkeit.
+
+Sauber wird die Metrik erst, wenn sie aus den **Greedy**-Zwischenmessungen käme
+statt aus den Trainingsepisoden. Das ist im DQN-Paket nicht umgesetzt (`eval.csv`
+liegt nur alle 50.000 Schritte vor, das ist für eine Schwelle zu grob). Solange
+das so bleibt, gehört zu jeder `steps_to`-Zahl im Vergleich der Satz, mit welcher
+Explorationsrate sie gemessen wurde.
 
 **Der Return darf nie zwischen Reward-Schemata verglichen werden** —
 verschiedene Schemata vergeben per Konstruktion verschieden viele Punkte.
@@ -932,9 +1532,11 @@ immer an).
 | Nur `neither` ist gut, die Einzelabschaltungen nicht | Beide Terme zusammen erzeugen das Problem; einer allein genügt nicht |
 | Alle vier gleichauf | Der Unterschied zwischen den Presets kommt aus etwas anderem — dann bleibt als Kandidat der Modus (Prioritätskette) oder eine Wechselwirkung mit `gamma` |
 
-### 11.4 Parameter-Studie (Aufbau in 12.3)
+### 11.4 Parameter-Studie (Aufbau in 12.3, Ergebnisse in 8.7)
 
-Basis ist `shaped` mit der Konfiguration aus Abschnitt 7.
+Basis ist `shaped` mit der Konfiguration aus Abschnitt 7. Der Abgleich steht am
+Ende von 8.7: **vier der acht Vorhersagen sind widerlegt**, und beide Gewinner
+wurden nicht vorhergesagt.
 
 | Parameter | Erwartung | Was der Befund bedeutet |
 | --- | --- | --- |
@@ -1023,41 +1625,68 @@ Preset vergibt per Konstruktion andere Punktzahlen. Die Episodenlänge ist über
 die Geometrie an den Score gekoppelt (≈ 37,7 Frames je Röhre) und trägt keine
 eigene Information.
 
-### 12.3 Parameter-Studie — startbereit, der nächste Lauf
+### 12.3 Parameter-Studie — gelaufen, Ergebnisse in 8.7
 
 Sucht die beste Einstellung für den finalen Lauf. Hyperparameter, jeder für sich
 um eine gemeinsame Basis herum variiert.
 
+**So gelaufen: alle sechs Parameter, 65 Läufe, in drei Aufrufen.** Zuerst die
+vier unten als „ja" markierten (45 Läufe), dann `--params hidden` (10), dann der
+Rest des Rasters (10). Der letzte Aufruf war der Befehl ohne `--params`: Er
+überspringt alles Fertige, rechnet nur `target_update_interval` und schreibt
+`study.json` mit allen 65 Einträgen neu.
+
 ```powershell
+# so ist es gelaufen (drei Aufrufe, der letzte holt den Rest)
 python -m flappy_bird_gymnasium.dqn.experiments params `
     --seeds 5 --total-steps 1000000 --reward shaped `
     --params learning_rate gamma n_step epsilon_decay_steps `
     --eval-interval 50000 --eval-episodes 10 --eval-max-episode-steps 200000 --workers 13
+python -m flappy_bird_gymnasium.dqn.experiments params ... --params hidden
+python -m flappy_bird_gymnasium.dqn.experiments params ...        # ohne --params
 ```
 
-**45 Läufe** (9 Varianten × 5 Seeds), rund **6 bis 6,5 Stunden**, etwa 105 MB.
+**Dass die Aufteilung folgenlos ist, ist kein Zufall, sondern Aufbau:** Jeder
+Lauf trägt seine eigene `config.json`, die Basis ist über alle Aufrufe dieselbe,
+und `experiments.py` überspringt einen Lauf nur bei identischer Konfiguration
+(Abschnitt 14). Die 65 Läufe sind deshalb auswertbar, als wären sie in einem
+Durchgang entstanden. Was die Aufteilung **doch** verfälscht hat, ist die
+Wandzeit — siehe 9.8.
+
+**65 Läufe** (13 Varianten × 5 Seeds), rund **8,5 Stunden**, etwa 150 MB.
+
+**Im Nachhinein die wichtigste Lehre dieser Studie:** Die vier „wichtigsten"
+Parameter wurden vorab ausgewählt, um Zeit zu sparen — und **beide Gewinner
+standen in der gestrichenen Hälfte** (8.7, Hypothesen-Abgleich). Hätte der Lauf
+bei 45 aufgehört, wäre das Ergebnis „die Standardkonfiguration ist schon gut"
+gewesen. Bei einem Raster, dessen Kosten in der Zahl der Parameter nur *linear*
+wachsen, lohnt das Streichen selten.
 
 Die Zeit ergibt sich aus der Belegung: 13 Läufe laufen gleichzeitig, jeder
-braucht rund 100 Minuten, ein Durchgang dauert also etwa 1,7 Stunden. 45 Läufe
-sind drei volle Durchgänge plus einen mit nur 6 Läufen — der letzte ist
+braucht rund 100 Minuten, ein Durchgang dauert also etwa 1,7 Stunden. Die ersten
+45 Läufe sind drei volle Durchgänge plus einen mit nur 6 Läufen — der letzte ist
 schneller, weil sich weniger Läufe die Kerne teilen. Jeder weitere Parameter
-kostet 10 Läufe, also rund 1,5 Stunden.
+kostet 10 Läufe, also rund 1,5 Stunden; die beiden nachgezogenen zusammen knapp
+2,5 Stunden, weil `hidden` 512×512 doppelt so lange rechnet.
 
-| Parameter | Basis | getestet | im Lauf | Erwartung |
+Genau diese ungleiche Belegung ist es, die die `minutes`-Spalte unbrauchbar
+macht — siehe 9.8.
+
+| Parameter | Basis | getestet | Erwartung | Befund (8.7) |
 | --- | --- | --- | --- | --- |
-| `learning_rate` | 1e-4 | 5e-5, 3e-4 | ja | 1e-4 am besten; 3e-4 vermutlich instabil |
-| `gamma` | 0,99 | 0,95, 0,999 | ja | 0,99 am besten; 0,95 zu kurzsichtig für 50 Frames Vorlauf, 0,999 instabil |
-| `n_step` | 3 | 1, 5 | ja | 3 oder 5; n = 1 war unter `legacy` klar schlechter (8.5) |
-| `epsilon_decay_steps` | 200.000 | 100.000, 400.000 | ja | offen — `shaped` lernt schneller, vielleicht genügt weniger Exploration |
-| `target_update_interval` | 1.000 | 250, 4.000 | nein | mittlerer Wert am besten |
-| `hidden` | 256×256 | 64×64, 512×512 | nein | wenig Unterschied; wenn 64×64 mithält, ist das ein Argument für kleinere Netze |
+| `learning_rate` | 1e-4 | 5e-5, 3e-4 | 1e-4 am besten; 3e-4 vermutlich instabil | nur Tempo, monoton; 3e-4 nicht instabil |
+| `gamma` | 0,99 | 0,95, 0,999 | 0,99 am besten; 0,95 zu kurzsichtig für 50 Frames Vorlauf, 0,999 instabil | 0,99 bestätigt, kein Wert schlägt sie |
+| `n_step` | 3 | 1, 5 | 3 oder 5; n = 1 war unter `legacy` klar schlechter (8.5) | 3 bleibt; unter `shaped` kaum noch Wirkung |
+| `epsilon_decay_steps` | 200.000 | 100.000, 400.000 | offen — `shaped` lernt schneller, vielleicht genügt weniger Exploration | 100k lernt 20 % schneller, gleiche Qualität |
+| `target_update_interval` | 1.000 | 250, 4.000 | mittlerer Wert am besten | **250 gewinnt**, monoton — Stabilität |
+| `hidden` | 256×256 | 64×64, 512×512 | wenig Unterschied; wenn 64×64 mithält, ist das ein Argument für kleinere Netze | **512×512 gewinnt**, 64×64 fällt stark ab |
 
-Alle sechs Parameter sind im Raster hinterlegt. Ohne `--params` laufen sie alle
-(65 Läufe, rund 8,5 Stunden). Die vier ausgewählten sind die mit der größten
-erwarteten Wirkung: Lernrate und gamma sind die klassischen Stellschrauben,
-n-step war in der Ablation der stärkste Einzelbaustein, und die Explorationsdauer
-passt möglicherweise nicht mehr zum schnelleren Reward. Die beiden übrigen lassen
-sich einzeln nachziehen, etwa `--params hidden` (15 Läufe, gut 2 Stunden).
+Alle sechs Parameter sind im Raster hinterlegt; ohne `--params` laufen sie alle.
+Ursprünglich waren nur die ersten vier geplant — die mit der größten erwarteten
+Wirkung: Lernrate und gamma als klassische Stellschrauben, n-step als stärkster
+Einzelbaustein der Ablation, die Explorationsdauer als offene Frage zum
+schnelleren Reward. **Genau diese Auswahl war der Fehler:** Die beiden Gewinner
+standen in der gestrichenen Hälfte.
 
 **Zwei Abkürzungen, die bewusst *nicht* genommen wurden:**
 
@@ -1105,18 +1734,65 @@ kleinstmögliche p-Wert bei 0,008, aber wer achtmal testet, findet auch ohne
 echten Effekt gelegentlich etwas. Deshalb zählt nur, was deutlich und in
 mehreren Messungen auftritt.
 
-### 12.4 Finaler Lauf — danach
+### 12.4 Finaler Lauf — gelaufen, Ergebnisse in 8.9
 
-Die gewählte Konfiguration auf **neuen Seeds**:
+Die in 8.7 gewählte Konfiguration auf **neuen Seeds**, in drei Armen. Zwei
+Befehle in **dasselbe** `--runs-root` — die Armnamen kollidieren nicht, und nur
+so liegen alle drei in einem Verzeichnis und sind gepaart vergleichbar.
 
 ```powershell
+# Arm 2 und 3: getunt, mit und ohne das grosse Netz
+python -m flappy_bird_gymnasium.dqn.experiments sweep `
+    --param hidden --values 256x256 512x512 `
+    --seeds 5 --seed-offset 100 --total-steps 1000000 --reward shaped `
+    --target-update-interval 250 `
+    --eval-interval 50000 --eval-episodes 10 --eval-max-episode-steps 500000 `
+    --runs-root runs/final_dqn --workers 13
+
+# Arm 1: die ungetunte Basis auf denselben neuen Seeds
 python -m flappy_bird_gymnasium.dqn.experiments seeds `
     --seeds 5 --seed-offset 100 --total-steps 1000000 --reward shaped `
     --eval-interval 50000 --eval-episodes 10 --eval-max-episode-steps 500000 `
-    --runs-root runs/final --workers 5
-    # plus die in 12.3 gefundenen Parameter, z. B. --gamma 0.999
-python -m flappy_bird_gymnasium.dqn.summarize runs/final --episodes 50 --max-episode-steps 500000
+    --runs-root runs/final_dqn --workers 13
 ```
+
+**15 Läufe** (3 Arme × Seeds 100 – 104), rund **3 bis 3,5 Stunden**, etwa 50 MB.
+Bricht ein Lauf ab: denselben Befehl erneut starten, Fertiges wird übersprungen.
+
+| Arm | `hidden` | `target_update_interval` | Rolle | Ausgang (8.9) |
+| --- | --- | --- | --- | --- |
+| `baseline` | 256×256 | 1.000 | **Kontrolle**: die ungetunte Konfiguration aus Abschnitt 7 | **gewinnt** |
+| `hidden_256x256` | 256×256 | 250 | nur die billige der beiden Änderungen | kein Effekt |
+| `hidden_512x512` | 512×512 | 250 | beide Gewinner aus 8.7 | widerlegt |
+
+**Warum drei Arme und nicht einer:** Die beiden Gewinner wurden aus zwölf
+Vergleichen auf den Seeds 0 – 4 ausgewählt. Wer so auswählt, findet auch ohne
+echten Effekt gelegentlich etwas (8.7, Einordnung der p-Werte). Ein finaler Lauf
+*nur* mit der getunten Konfiguration könnte deshalb sagen „unser bester Agent
+schafft N Röhren", aber **nicht** „das Tuning hat geholfen" — dafür fehlt die
+Vergleichszahl auf Seeds, die bei der Auswahl keine Rolle gespielt haben. Der
+`baseline`-Arm kostet 5 Läufe und rund eine Stunde und macht aus einer
+ausgewählten Behauptung ein geprüftes Ergebnis.
+
+Der dritte Arm zerlegt den Gewinn zusätzlich in seine zwei Ursachen: Liegen
+`hidden_256x256` und `hidden_512x512` gleichauf, kommt alles von
+`target_update_interval` 250, und das doppelt so teure Netz (138 gegen 68 min)
+lohnt sich nicht. Das ist unmittelbar handlungsrelevant für alle weiteren Läufe.
+
+#### Was hier warum eingestellt ist
+
+| Einstellung | Warum |
+| --- | --- |
+| `hidden` 512×512 | Gewinner in 8.7: letzter Checkpoint p = 0,008 (jeder Seed über jedem Basis-Seed), Lerngeschwindigkeit p = 0,008, monoton über 64/256/512 |
+| `target_update_interval` 250 | Gewinner in 8.7: letzter Checkpoint p = 0,032, Median 662 gegen 186, monoton über 250/1.000/4.000 |
+| `epsilon_decay_steps` 200.000 (unverändert) | 100.000 lernt 20 % schneller, endet aber **gleich gut** (8.7). Bei festem Budget ist Tempo kein Qualitätsgewinn — und jede zusätzliche Änderung vergrößert das Risiko einer Wechselwirkung |
+| `learning_rate` 1e-4 (unverändert) | dieselbe Begründung: 3e-4 ist schneller, nicht besser |
+| `n_step` 3, `gamma` 0,99, `dueling` an | in 8.7 von keiner Alternative geschlagen; hält die Konfiguration über alle Studien vergleichbar |
+| Reward `shaped` | schnellstes und bestes Schema (8.6). **Nur für „was kann unser bester DQN-Agent?"** — für den Verfahrensvergleich gilt 12.8 |
+| 1.000.000 Schritte | eingespieltes Budget aller Studien. Mehr würde die Vergleichbarkeit mit Ablation, Reward- und Parameter-Studie brechen, bevor die Budget-Frage aus 10.4 entschieden ist |
+| Seeds 100 – 104 | siehe unten |
+| Messlimit 500.000 | siehe 12.7; in 8.7 hat schon das 200.000er-Limit wieder zensiert |
+| `--workers 13` | der eingespielte Wert auf 14 Kernen. 15 Läufe sind ein voller Durchgang plus zwei Nachzügler — die `minutes`-Spalte ist dadurch wieder verzerrt (9.8), die Ergebnisse nicht |
 
 **Warum neue Seeds:** Wer auf den Seeds 0 – 4 die Parameter aussucht und dann auf
 denselben Seeds das Ergebnis berichtet, berichtet zu optimistisch — die Wahl hat
@@ -1124,7 +1800,114 @@ sich an den Zufall genau dieser Seeds angepasst. Der finale Lauf misst die
 gewählte Konfiguration deshalb auf Seeds, die bei der Auswahl keine Rolle
 gespielt haben. Das ist dieselbe Trennung wie zwischen Trainings- und Testdaten.
 
-**Warum Messlimit 500.000:** siehe 12.7.
+**Was der dritte Arm zusätzlich leistet:** Der Aufbau „ein Parameter je
+Variante" (12.3) kann Wechselwirkungen nicht finden. Die beiden Gewinner
+verbessern **dieselbe** Größe — die Stabilität — und könnten sich überschneiden.
+Mit drei Armen ist der Gewinn zerlegt: `baseline` → `hidden_256x256` misst den
+Beitrag von `target_update_interval` 250, `hidden_256x256` → `hidden_512x512`
+den des größeren Netzes. Fallen die letzten beiden zusammen, ist das ein echtes
+Ergebnis — und ein Argument, alle weiteren Experimente mit dem kleineren Netz zu
+fahren.
+
+#### Auswertung danach
+
+```powershell
+python -m flappy_bird_gymnasium.dqn.summarize runs/final_dqn --episodes 50
+python -m flappy_bird_gymnasium.dqn.summarize runs/final_dqn --episodes 50 --checkpoint latest.pt
+python -m flappy_bird_gymnasium.dqn.significance runs/final_dqn --baseline baseline
+python -m flappy_bird_gymnasium.dqn.significance runs/final_dqn --baseline baseline --file evaluations_latest.csv
+python -m flappy_bird_gymnasium.dqn.plot runs/final_dqn --study --out runs/final_dqn/final.png
+```
+
+`--baseline baseline` ist hier der ungetunte Arm — der Test beantwortet damit
+genau die Frage, für die er da ist: **Hält der Tuning-Gewinn auf Seeds, die bei
+der Auswahl keine Rolle gespielt haben?** Der letzte Checkpoint ist dabei die
+entscheidende Messung, weil der Gewinn in 8.7 dort lag und nicht beim besten.
+
+`--max-episode-steps` wird **nicht** übergeben: Ohne das Flag nimmt `summarize.py`
+den Wert aus der `config.json`, und der steht durch den Lauf bereits auf 500.000.
+Damit heißen die Dateien schlicht `evaluations.csv` und `evaluations_latest.csv`,
+und `significance.py` findet sie ohne `--file`.
+
+**Rechnen mit einer knappen Stunde allein für die Messung.** 50 Episoden bei
+einem Agenten um 800 Röhren sind rund 1,5 Millionen Frames je Lauf — die
+Evaluation wird hier erstmals teurer als ein spürbarer Teil des Trainings.
+
+**Danach als Erstes `truncation_rate` prüfen.** Ist sie > 0, war auch 500.000
+zu wenig und die Endzahl ist eine Untergrenze (Regel 3). Dann mit
+`--max-episode-steps 2000000` nachmessen; das erzeugt getrennte Dateien und
+lässt die bestehenden unangetastet.
+
+#### Für die Aufnahmen
+
+Die Aufnahme darf aus dem **besten Seed** stammen — eine Aufnahme ist eine
+Illustration, kein Messwert. Regel 2 („einen Seed wählt man nicht aus") gilt für
+*berichtete Zahlen*: Die Zahl in der Präsentation ist der Mittelwert über die
+fünf Seeds mit seiner Streuung, nicht der Wert des Laufs, den man gefilmt hat.
+Beides nebeneinander zu zeigen ist ehrlich, solange dabeisteht, was was ist.
+
+Praktischer Hinweis: Bei 800 Röhren dauert eine vollständige Episode rund 30.000
+Frames, also **gut 8 Minuten Video bei 60 fps**. Für die Präsentation genügt ein
+Ausschnitt — oder ein niedrig gesetztes `--max-episode-steps` beim Aufzeichnen.
+
+### 12.4a Abbildungen und Aufnahme
+
+Beide Ausgaben landen in `docs/`, das in `.gitignore` steht — sie sind aus Code
+und Lauf-Logs jederzeit neu erzeugbar.
+
+```powershell
+python -m flappy_bird_gymnasium.dqn.figures            # 5 PNG, wenige Sekunden
+
+# Der Einstieg der staerksten Episode -- rund 2 Minuten
+python -m flappy_bird_gymnasium.dqn.record `
+    runs/final_dqn/hidden_512x512_seed102/best.pt --out docs/dqn_agent_start.gif `
+    --seed 90010 --seconds 30 --every 2 --scale 0.75
+
+# Ihr Ende bei 13.273 Roehren -- rund 15 Minuten, weil erst 500.000 Frames
+# simuliert werden muessen, bevor aufgezeichnet wird
+python -m flappy_bird_gymnasium.dqn.record `
+    runs/final_dqn/hidden_512x512_seed102/best.pt --out docs/dqn_agent_13273.gif `
+    --seed 90010 --skip-to-pipe 13245 --max-steps 500000 `
+    --seconds 60 --every 2 --scale 0.75
+```
+
+| Datei | Zeigt | Quelle |
+| --- | --- | --- |
+| `dqn_ergebnis.png` | die Endzahl mit Seed-Streuung gegen die Zufallsreferenz | 8.9 |
+| `dqn_stufen.png` | Lehrbuch-DQN → Bausteine → Reward, in Leistung und Tempo | 8.5, 8.6 |
+| `dqn_reward.png` | die 7 Schemata, getrennt nach Strafe aufs Flattern | 8.6 |
+| `dqn_ablation.png` | Beitrag der einzelnen Algorithmus-Bausteine | 8.5 |
+| `dqn_lernkurve.png` | Trainingsverlauf mit Seed-Band — das Format für den Verfahrensvergleich | 8.9, 8.5 |
+| `dqn_agent_start.gif` | 30 s Einstieg der stärksten Episode, Zähler bis 23 | — |
+| `dqn_agent_13273.gif` | ihre letzten 36 s, Zähler endet bei **13.273** | — |
+
+`figures.py` hält drei Regeln ein, die aus Abschnitt 9 folgen: **ein Punkt je
+Seed** statt Balken mit Fehlerbalken (die Verteilungen sind stark schief),
+**letzter statt bester Checkpoint** als Kopfzahl (9.9), und **nie der Return**
+zwischen Reward-Schemata (10.1). Keine Zahl ist im Code eingetragen; alle werden
+aus den `evaluations*.csv` gelesen.
+
+Die Aufnahmen stammen aus `hidden_512x512_seed102` — dem Lauf aus dem
+**verworfenen** Arm, der mit Ø 3.447 Röhren der stärkste Einzel-Checkpoint des
+Projekts ist. Das ist kein Widerspruch zu 8.9: Eine Aufnahme ist eine
+Illustration, kein Messwert (12.4, letzter Absatz). Die begleitenden `.txt`
+schreiben das mit auf, damit die Zuordnung nicht verlorengeht.
+
+**Welche Episode die 13.273 war.** Der berichtete `max_score` ist das Maximum
+über die 30 Evaluationsepisoden (Seeds 90.000 – 90.029); welche es war, steht in
+keiner Ausgabedatei. Alle 30 einzeln nachgespielt ergibt
+`runs/final_dqn/_episode_scan.json`: Es ist **Seed 90.010**, und die Episode ist
+nicht zu Ende gegangen — sie lief mit 500.000 Frames ins Messlimit, der Agent
+lebte noch. Die 13.273 sind also eine Untergrenze. Der Nachlauf hat nebenbei den
+Mittelwert von 3.447,7 exakt reproduziert, ein dritter kostenloser
+Reproduzierbarkeitsnachweis.
+
+**Der Punktestand wird von `record.py` selbst ins Bild gezeichnet.** Die
+Umgebung blendet ihn im `rgb_array`-Modus bewusst aus
+(`flappy_bird_env.render`), und ihre Ziffern-Sprites werden ohne
+Alpha-Konvertierung als weißer Block geblittet. Ohne den Zähler wäre der
+13.273-Clip von jedem anderen nicht zu unterscheiden — er ist der ganze Punkt
+der Aufnahme.
 
 ### 12.5 Term-Studie — gebaut, zurückgestellt
 
@@ -1159,9 +1942,9 @@ Hypothesen dazu stehen in 11.3.
 | --- | --- | --- |
 | 1 | Grundkonfiguration festlegen (Ablation) | erledigt, 8.5 |
 | 2 | Reward-Studie | erledigt, 8.6 |
-| 3 | **Parameter-Studie** | **startbereit, 12.3** |
-| 4 | Finaler Lauf auf neuen Seeds, unzensiert ausgewertet | danach, 12.4 |
-| 5 | Aufnahmen des finalen Agenten | danach; `rl/record.py` aus dem PPO-Branch übernehmen |
+| 3 | Parameter-Studie | erledigt, 8.7 |
+| 4 | Finaler Lauf auf neuen Seeds, unzensiert ausgewertet | **erledigt, 8.9** — Tuning widerlegt |
+| 5 | **Aufnahmen des finalen Agenten** | **als Nächstes**; `rl/record.py` aus dem PPO-Branch übernehmen |
 | 6 | Zusammenführung mit PPO, Q-Learning, CNN | braucht die Budget-Entscheidung aus 10.4 |
 | — | Term-Studie (Ursache des Reward-Effekts) | optional, 12.5 |
 
@@ -1175,14 +1958,17 @@ Teil jeder bisherigen Konfiguration. Verändert wird nur das **Messlimit**.
 | Ablation | 20.000 | ein Lauf zu 93 % zensiert |
 | Reward | 50.000 | drei Läufe teilweise zensiert |
 | Reward, Nachmessung | 200.000 | keine |
-| Parameter-Studie | 200.000 | erwartet: keine |
+| Parameter-Studie | 200.000 | **acht Lauf-Messungen zensiert, schlimmste zu 16,7 %** |
 | **Finaler Lauf** | **500.000** | Reserve, siehe unten |
 
-**Lohnt eine weitere Erhöhung?** Für die Parameter-Studie nein: Bei 200.000
-Frames lief in der Reward-Studie keine einzige Episode mehr ins Limit. Die
-Reserve ist aber knapper, als die Null vermuten lässt — die beste Episode von
-`survival_seed3` dauerte rund 171.000 Frames, also **85 % des Limits**. Ein
-Agent, der nach der Parametersuche noch besser wird, überschreitet das.
+**Diese Tabelle enthält eine widerlegte Vorhersage — sie bleibt bewusst stehen.**
+Für die Parameter-Studie stand hier „erwartet: keine Zensur", begründet damit,
+dass bei 200.000 Frames in der Reward-Studie keine einzige Episode mehr ins Limit
+lief. Gleich im nächsten Absatz stand die Einschränkung: Die beste Episode von
+`survival_seed3` dauerte rund 171.000 Frames, also **85 % des Limits**, und ein
+Agent, der nach der Parametersuche besser wird, überschreitet das. Genau so kam
+es (8.7). Die Warnung war richtig, die Vorhersage falsch — wer eine Reserve von
+15 % „ausreichend" nennt, hat keine Reserve.
 
 Für den finalen Lauf deshalb 500.000. Die Kosten sind gering, weil nur die
 Episoden teuer sind, die tatsächlich so lange überleben. **Die Prüfung bleibt
@@ -1197,9 +1983,21 @@ Zwei verschiedene Fragen, zwei verschiedene Antworten:
   identisch sein — das ist eine Teamentscheidung (10.4). `legacy` ist der
   naheliegende gemeinsame Nenner, weil es das Original reproduziert und die
   PPO-Arbeit es ebenfalls als Baseline führt.
+
+  **Die Hyperparameter-Frage hat sich hier erledigt:** Das Tuning aus 8.7 ist
+  auf neuen Seeds widerlegt (8.9), es gibt also keine getunte Konfiguration mehr,
+  die man versehentlich mitnehmen könnte. Über alle Schemata hinweg gilt die
+  Konfiguration aus Abschnitt 7. Der Vorbehalt aus 8.7, Befund 5, bleibt
+  trotzdem gültig und wichtig: **Algorithmus-Bausteine sind schemaabhängig** —
+  n-step ist unter `legacy` der größte Einzelbeitrag und unter `shaped` fast
+  wirkungslos. Für einen `legacy`-Vergleich ist die unter `legacy` validierte
+  Bausteinwahl aus 8.5 die richtige.
 - **Für „was kann unser bester DQN-Agent?"** ist `shaped` oder `survival` die
-  Antwort: 442 bzw. 437 Röhren gegenüber 170 bei `legacy`. Der beste Einzellauf
-  (`survival_seed3`) kommt auf 1.173.
+  Antwort. Die berichtete Zahl ist der finale Lauf: **Ø 488,7 ± 408,7 Röhren**
+  über fünf gehaltene Seeds (8.9). Der stärkste je gemessene Einzel-Checkpoint
+  ist `runs/final_dqn/hidden_512x512_seed102/best.pt` mit Ø 3.447,7 Röhren
+  (Median 1.823,5, beste Episode 13.273 — zensiert, also eine Untergrenze). Er
+  taugt für **Aufnahmen**, nicht als berichtete Zahl (Regel 2, 12.4).
 
 ---
 
@@ -1213,6 +2011,11 @@ Zwei verschiedene Fragen, zwei verschiedene Antworten:
 | Dopplung zwischen `dqn/` und `rl/` | offen; für die gemeinsame Endauswertung auflösen |
 | Aufnahmen für die Präsentation | offen; der PPO-Branch hat `rl/record.py`, nach dem Merge übernehmen |
 | Schwierigkeit (`pipe_gap` 80 / 100 / 130) | offen; eignet sich als gemeinsames Experiment über alle vier Verfahren |
+| Wechselwirkung der beiden Parameter-Gewinner | **erledigt** — gegenstandslos, beide Gewinner sind auf neuen Seeds widerlegt (8.9) |
+| `quick_eval` misst am Trainingslimit (~79 Röhren) | **offen und folgenreich** — deckelt den Greedy-Verlauf und die Auswahl von `best.pt`, sobald Agenten besser als ~79 Röhren werden (9.9). Fix: eigenes, höheres Limit für `quick_eval` |
+| Double DQN, Dueling und Huber-Loss unter `shaped` nie geprüft | offen; unter `legacy` ausgewählt (8.5), Begründungen stützen sich auf den Überlebensbonus, den `shaped` nicht hat (8.7, „Eine Altlast") — eine Ablation unter `shaped` kostet ~2,5 h |
+| `steps_to_<n>` aus Greedy- statt Trainingsepisoden | offen; die Metrik ist an die Explorationsrate gekoppelt und damit über Verfahren hinweg nur eingeschränkt vergleichbar (10.1) |
+| Lernrate über 3e-4 | offen; 3e-4 war schneller und nicht instabil (8.7), 1e-3 wurde nie getestet |
 | Prioritized Experience Replay | nicht umgesetzt |
 | LIDAR-Beobachtungen mit Frame-Stacking | nicht umgesetzt |
 
