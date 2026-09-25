@@ -122,6 +122,48 @@ while True:
 env.close()
 ```
 
+## Evaluation
+
+All learning methods are measured by the same code in
+`flappy_bird_gymnasium/rl/analysis/`, so their numbers can sit in one table:
+paired episode seeds, an uncensored frame limit, a random-policy reference,
+medians with per-seed ranges, and an exact permutation test.
+
+```bash
+python -m flappy_bird_gymnasium.rl.analysis.summarize runs/study_reward --algorithm qlearning
+python -m flappy_bird_gymnasium.rl.analysis.significance runs/study_reward --baseline legacy
+python -m flappy_bird_gymnasium.rl.analysis.plot runs/study_reward --out docs/reward.png
+python -m flappy_bird_gymnasium.rl.analysis.plot runs/study_reward --behaviour --out docs/behaviour.png
+python -m flappy_bird_gymnasium.rl.analysis.record runs/q1/best.npz --algorithm qlearning --out docs/q1.gif
+```
+
+To plug in a method, write its runs in this layout:
+
+```
+runs/<study>/<variant>_seed<n>/
+    config.json     the run's configuration
+    train.csv       one row per training episode, at least `step` and `score`
+    eval.csv        optional: periodic greedy measurements (rl/runlog.EVAL_LOG_FIELDS)
+    summary.json    written last; marks the run as finished
+    <checkpoint>    e.g. best.pt, latest.pt
+```
+
+Then add a `RunLoader` that turns a checkpoint into a greedy policy, and give
+it one line in `LOADERS` in `rl/analysis/runs.py`.
+`flappy_bird_gymnasium/qlearning/evaluate.py` has the example (`RUN_LOADER`).
+Until the loader is registered, `--algorithm package.module:RUN_LOADER` works too.
+
+Runs that look different don't have to be rewritten:
+
+* **Other log names** (PPO: `episodes.csv` with `global_step`): set
+  `train_log` and `step_column` in the `RunLoader`. For other logs, `plot --runs`
+  takes `--source progress.csv --step-column global_step`.
+* **Other observations** (CNN: stacked pixel frames): the loader sets
+  `LoadedRun.make_env`, built with `rl.rollout.make_env(..., wrapper=...,
+  background="night")`, so the reward scheme and frame limit stay the shared ones.
+* **Behaviour metrics** (flap rate, offset from the gap centre) are read off the
+  game state, so they exist under every observation type.
+
 ## Playing
 
 To play the game (human mode), run the following command:
