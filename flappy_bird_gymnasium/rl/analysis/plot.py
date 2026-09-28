@@ -81,6 +81,37 @@ DEFAULT_PANELS = ("score", "return", "length", "flap_rate")
 #: Columns drawn on a log axis, since they span orders of magnitude.
 LOG_SCALED = ("td_error", "loss")
 
+#: What a log file holds, as ``(description, what one row counts)``.
+#:
+#: A curve read from a training log shows episodes played *with* exploration
+#: and against the training frame limit; one read from ``eval.csv`` shows the
+#: periodic greedy measurement. The two rank variants differently -- measured
+#: on one tabular reward study, ``energy`` led the training score and came
+#: fourth on the greedy one -- so every axis says which of them it shows.
+#: Without that, two figures from the same study look like they contradict
+#: each other.
+SOURCE_KINDS: Dict[str, Tuple[str, str]] = {
+    TRAIN_LOG: ("Training, mit Exploration", "Episoden"),
+    "episodes.csv": ("Training, mit Exploration", "Episoden"),  # the PPO work
+    "eval.csv": ("Greedy, ohne Exploration", "Messpunkte"),
+}
+
+
+def _source_kind(source: str) -> Tuple[str, str]:
+    """How to describe ``source`` on an axis, and what one of its rows counts.
+
+    An unregistered log (``progress.csv`` of the PPO work, say) is named by
+    its file name alone rather than guessed at.
+    """
+    return SOURCE_KINDS.get(source, ("", "Zeilen"))
+
+
+def _origin(source: str) -> str:
+    """``source`` plus what it holds, for an axis label."""
+    kind, _ = _source_kind(source)
+    return f"{source} - {kind}" if kind else source
+
+
 #: Panels of the ``--behaviour`` figure: column, axis label, and whether the
 #: axis may turn logarithmic once the seeds spread over orders of magnitude.
 BEHAVIOUR = (
@@ -261,8 +292,12 @@ def plot_study(
 ) -> None:
     """Learning curves per variant plus a dot plot of the final level.
 
-    Both halves show the *training* column, i.e. episodes played with
-    exploration. For what the finished policy does, see ``--behaviour``.
+    Both halves read the same ``source``, and every axis names it: with the
+    default training log they show episodes played *with* exploration, which
+    is a different quantity from the greedy score ``--behaviour`` reports and
+    can rank the variants differently. Passing ``--source eval.csv --column
+    median_score`` draws the greedy measurement instead, which is the one that
+    lines up with ``--behaviour``.
     """
     plt = _pyplot(out)
     grouped = collect_runs(study_root)
@@ -293,10 +328,18 @@ def plot_study(
                 finals.append(float(np.mean(values[-window:])))
         _dots(dot_ax, index, finals, color)
 
+    kind, unit = _source_kind(source)
+    origin = _origin(source)
+    # window 1 means no smoothing at all; "gleitend ueber 1 Episoden" would be
+    # both wrong and unreadable
+    smoothed = f", gleitend ueber {window} {unit}" if window > 1 else ""
+    final = f"Mittel der letzten {window} {unit}" if window > 1 else "letzter Messwert"
+
     curve_ax.set_xlabel("Umgebungsschritte")
-    curve_ax.set_ylabel(f"{column}, gleitend ueber {window} Episoden")
+    curve_ax.set_ylabel(f"{column}{smoothed}\n{origin}")
     curve_ax.set_title(
-        f"Lernkurven {study_root.name}: Median und Quartile ueber die Seeds",
+        f"Lernkurven {study_root.name}: {kind or source}\n"
+        "Median und Quartile ueber die Seeds",
         loc="left",
         fontsize=10,
     )
@@ -304,7 +347,7 @@ def plot_study(
     curve_ax.legend(frameon=False, fontsize=8)
 
     _variant_axis(dot_ax, names)
-    dot_ax.set_ylabel(f"{column}, Mittel der letzten {window} Episoden")
+    dot_ax.set_ylabel(f"{column}, {final}\n{origin}")
     dot_ax.set_title("ein Punkt je Seed, Strich = Median", loc="left", fontsize=10)
     _finish(plt, figure, out)
 
@@ -416,7 +459,8 @@ def plot_runs(
                     label=run_dir.name,
                     linewidth=1.2,
                 )
-        axis.set_title(f"{column} ({source}, gleitend ueber {window})", loc="left")
+        smoothing = f", gleitend ueber {window}" if window > 1 else ""
+        axis.set_title(f"{column} ({_origin(source)}{smoothing})", loc="left")
         if column in LOG_SCALED:
             axis.set_yscale("log")
         _millions(axis)
