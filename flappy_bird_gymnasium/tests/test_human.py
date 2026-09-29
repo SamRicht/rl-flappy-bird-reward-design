@@ -22,7 +22,7 @@
 # SOFTWARE.
 # ==============================================================================
 
-""" Tests the simple-observations version of the Flappy Bird environment with a
+"""Tests the simple-observations version of the Flappy Bird environment with a
 human player.
 """
 

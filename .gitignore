@@ -146,3 +146,17 @@ runs/
 
 # Leftover recording at the repository root, predating this work.
 /video.gif
+
+# Editor and tooling directories that carry machine-specific state.
+.vscode/
+*.code-workspace
+
+# Network checkpoints. `runs/` covers the ones a study writes; this catches
+# strays saved elsewhere, which are binary, large and always regenerable.
+*.pt
+*.pth
+*.ckpt
+
+# Default output directory of `rl.plotting` when no --out is given.
+/figures/
+

@@ -22,7 +22,7 @@
 # SOFTWARE.
 # ==============================================================================
 
-""" Utility functions.
+"""Utility functions.
 
 Some of the code in this module is an adaption of the code in the `FlapPyBird`
 GitHub repository by `sourahbhv` (https://github.com/sourabhv/FlapPyBird),

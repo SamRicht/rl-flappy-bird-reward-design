@@ -1,0 +1,20 @@
+# Development dependencies.
+#
+#     pip install -r requirements-dev.txt
+#
+# These four tools are the ones a push is checked against. Run them before
+# pushing:
+#     black ./
+#     isort ./
+#     flake8 ./
+#     pytest flappy_bird_gymnasium/tests/
+#
+# Deliberately unpinned to match the CI workflow. Note that this means a new
+# major release of black can turn CI red without any change on our side.
+
+-r requirements.txt
+
+black
+flake8
+isort
+pytest

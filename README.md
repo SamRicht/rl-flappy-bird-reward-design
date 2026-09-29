@@ -40,10 +40,18 @@ There exist two options for the observations:
 
 ## Rewards
 
+The reward function is configurable. The default, `legacy`, reproduces the
+scheme of the upstream project:
+
 * +0.1 - **every frame it stays alive**
 * +1.0 - **successfully passing a pipe**
 * -1.0 - **dying**
-* −0.5 - **touch the top of the screen**
+* -0.5 - **touch the top of the screen**
+
+These terms form a *priority chain*: only the highest-priority term that fired
+contributes, so passing a pipe in the same frame in which the bird dies yields
+-1.0 rather than 0.0. `flappy_bird_gymnasium.rl.rewards` defines this and six
+alternative designs; see [Reward designs](#reward-designs) below.
 
 <br>
 
@@ -99,3 +107,30 @@ To see a random agent playing, add an argument to the command:
 To see a Deep Q Network agent playing, add an argument to the command:
 
     $ flappy_bird_gymnasium --mode dqn
+
+## Reinforcement learning
+
+`flappy_bird_gymnasium.rl` contains a PPO implementation written from scratch in
+PyTorch, together with the tooling used to study how the *formulation of the
+reward* changes the policy that is learned. It uses the 12-feature observation,
+not the LIDAR one.
+
+Install the dependencies first:
+
+    $ pip install -r requirements-dev.txt
+
+### Reward designs
+
+| Preset | Mode | alive | pipe | death | What it asks of the agent |
+| --- | --- | --- | --- | --- | --- |
+| `legacy` | override | +0.1 | +1.0 | -1.0 | The upstream scheme, unchanged. |
+| `additive` | additive | +0.1 | +1.0 | -1.0 | The same terms, summed instead of prioritised. |
+| `sparse` | additive | 0 | +1.0 | -1.0 | Pipes and death only; surviving as such earns nothing. |
+| `survival` | additive | +0.1 | 0 | -1.0 | Stay alive. Pipes are not rewarded at all. |
+| `shaped` | additive | 0 | +1.0 | -1.0 | Adds potential-based shaping towards the gap centre. |
+| `risk_averse` | additive | +0.1 | +1.0 | **-5.0** | The same task, but dying costs five times as much. |
+| `energy` | additive | +0.1 | +1.0 | -1.0 | Adds a cost of -0.02 per flap. |
+
+`legacy` and `additive` differ only in how the terms combine, which isolates the
+effect of the priority chain. `risk_averse` differs from `additive` in a single
+number.
