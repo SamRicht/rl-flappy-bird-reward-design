@@ -42,10 +42,14 @@ short_description = "A Gymnasium environment for the Flappy Bird game."
 # The compatible release operator (`~=`) is used to match any candidate version
 # that is expected to be compatible with the specified version.
 REQUIRED_PACKAGES = [
-    "gymnasium",
+    "gymnasium>=1.0",
     "numpy",
     "pygame",
+    # Needed by `flappy_bird_gymnasium.rl`: torch for the PPO networks,
+    # matplotlib for the figures, Pillow for the GIF recordings.
+    "torch",
     "matplotlib",
+    "Pillow",
 ]
 
 # Packages which are only needed for testing code.

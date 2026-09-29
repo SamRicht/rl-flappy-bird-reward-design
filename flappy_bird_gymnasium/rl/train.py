@@ -15,7 +15,13 @@ Every run writes into its own directory under ``runs/``:
 ``progress.csv``
     One row per PPO update, with the optimisation diagnostics.
 ``model.pt``
-    The final network weights (plus periodic checkpoints).
+    The final network weights.
+``model_best.pt``
+    The weights from the update with the best 100-episode rolling score.
+``model_late_NN.pt``
+    Five evenly spaced checkpoints from the last 20 % of training. Evaluating
+    all of them and pooling the episodes keeps a result from depending on the
+    arbitrary moment training happened to stop at.
 """
 
 import argparse
@@ -30,7 +36,7 @@ from typing import Deque, Dict, List, Optional
 import numpy as np
 import torch
 
-from flappy_bird_gymnasium.rl.envs import EnvConfig, make_vector_env
+from flappy_bird_gymnasium.rl.envs import EnvConfig, env_seeds, make_vector_env
 from flappy_bird_gymnasium.rl.ppo import (
     ActorCritic,
     PPOConfig,
@@ -41,6 +47,14 @@ from flappy_bird_gymnasium.rl.rewards import PRESETS, RewardConfig
 
 #: Episodes averaged before a checkpoint may be declared the best so far.
 BEST_SCORE_WINDOW = 100
+
+#: How many evenly spaced checkpoints to keep from the end of training, and the
+#: share of training they are drawn from. Evaluating a single final checkpoint
+#: measures one arbitrary moment of a process whose per-window score is drawn
+#: from a heavy-tailed distribution; averaging several late ones removes that
+#: lottery without averaging in the weaker early policy.
+LATE_CHECKPOINTS = 5
+LATE_FRACTION = 0.2
 
 EPISODE_FIELDS = ["global_step", "env_id", "return", "length", "score", "flap_rate"]
 PROGRESS_FIELDS = [
@@ -104,6 +118,7 @@ def train(
     run_dir: Path,
     device: torch.device = torch.device("cpu"),
     checkpoint_every: int = 0,
+    late_checkpoints: int = LATE_CHECKPOINTS,
     log_every: int = 10,
     verbose: bool = True,
     torch_threads: int = 1,
@@ -118,6 +133,10 @@ def train(
         device: Torch device; CPU is the faster choice for this small MLP.
         checkpoint_every: Save intermediate weights every N updates; ``0``
             disables intermediate checkpoints.
+        late_checkpoints: Number of evenly spaced checkpoints kept from the final
+            ``LATE_FRACTION`` of training, written as ``model_late_NN.pt``.
+            Evaluating all of them and pooling the episodes gives a far more
+            stable estimate than the single final checkpoint.
         log_every: Print a progress line every N updates.
         verbose: Whether to print progress at all.
         torch_threads: Intra-op thread limit; keep at 1 when running a study.
@@ -159,13 +178,25 @@ def train(
     episode_logger = CsvLogger(run_dir / "episodes.csv", EPISODE_FIELDS)
     progress_logger = CsvLogger(run_dir / "progress.csv", PROGRESS_FIELDS)
 
-    next_obs_np, _ = envs.reset(seed=ppo_config.seed)
+    # The explicit list matters. Gymnasium expands a plain ``int`` here into
+    # ``[seed, seed + 1, ...]``, which would hand run 1 seven of run 0's eight
+    # environments -- and this reset, not the constructor, is what seeds the
+    # generator that lays out the pipes.
+    next_obs_np, _ = envs.reset(seed=env_seeds(ppo_config.seed, ppo_config.n_envs))
     next_obs = torch.as_tensor(next_obs_np, dtype=torch.float32, device=device)
     next_done = torch.zeros(ppo_config.n_envs, device=device)
 
     # Running per-environment accumulators for the episode statistics.
     ep_return = np.zeros(ppo_config.n_envs)
     ep_length = np.zeros(ppo_config.n_envs, dtype=np.int64)
+
+    # Evenly spaced update indices in the final LATE_FRACTION of training.
+    late_updates = {}
+    if late_checkpoints > 0:
+        first = max(1, int(ppo_config.n_updates * (1.0 - LATE_FRACTION)))
+        picks = np.linspace(first, ppo_config.n_updates, late_checkpoints)
+        for index, update_no in enumerate(sorted({int(round(u)) for u in picks})):
+            late_updates[update_no] = index
 
     global_step = 0
     start_time = time.time()
@@ -322,6 +353,12 @@ def train(
                 flush=True,
             )
 
+        if update in late_updates:
+            torch.save(
+                {"model": model.state_dict(), "ppo": ppo_config.to_dict()},
+                run_dir / f"model_late_{late_updates[update]:02d}.pt",
+            )
+
         if checkpoint_every and update % checkpoint_every == 0:
             torch.save(
                 {"model": model.state_dict(), "ppo": ppo_config.to_dict()},
@@ -388,6 +425,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--run-dir", type=Path, default=None)
     parser.add_argument("--runs-root", type=Path, default=Path("runs"))
     parser.add_argument("--checkpoint-every", type=int, default=0)
+    parser.add_argument(
+        "--late-checkpoints",
+        type=int,
+        default=LATE_CHECKPOINTS,
+        help="Checkpoints kept from the last 20 %% of training, for averaging "
+        "over the late phase instead of trusting the final one. 0 disables.",
+    )
     parser.add_argument("--log-every", type=int, default=10)
     return parser
 
@@ -432,7 +476,15 @@ def main(argv: Optional[List[str]] = None) -> None:
     ppo_config, reward_config, env_config = config_from_args(args)
 
     run_dir = args.run_dir or args.runs_root / f"{args.reward}_seed{args.seed}"
-    summary = train(ppo_config, reward_config, env_config, run_dir)
+    summary = train(
+        ppo_config,
+        reward_config,
+        env_config,
+        run_dir,
+        checkpoint_every=args.checkpoint_every,
+        late_checkpoints=args.late_checkpoints,
+        log_every=args.log_every,
+    )
     print(json.dumps(summary, indent=2))
 
 

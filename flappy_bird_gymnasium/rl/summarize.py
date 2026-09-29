@@ -4,10 +4,17 @@ Training curves say how fast a configuration learned; this module says what its
 final policy actually does.  Every run is evaluated on the *same* seeds, so all
 variants see identical pipe layouts and the comparison is paired.
 
+By default it pools the episodes of every ``model_late_*.pt`` checkpoint rather
+than trusting the final one.  Late in training a logging window often holds a
+single episode drawn from a heavily right-skewed distribution, so one checkpoint
+measures one arbitrary moment; averaging over the late phase removes that
+lottery.  ``checkpoint_spread`` reports how far the per-checkpoint means sat
+apart -- the part of the variation that is genuinely the policy moving.
+
 Usage::
 
     python -m flappy_bird_gymnasium.rl.summarize runs/reward_study \
-        --episodes 50 --out runs/reward_study/evaluations.json
+        --episodes 25 --max-steps 900000 --workers 6
 """
 
 import argparse
@@ -24,8 +31,10 @@ from flappy_bird_gymnasium.rl.evaluate import evaluate, load_run
 from flappy_bird_gymnasium.rl.plotting import read_runs
 from flappy_bird_gymnasium.rl.train import limit_torch_threads
 
-#: Score thresholds for the sample-efficiency metric.
-THRESHOLDS = (10, 25, 50, 100, 200)
+#: Score thresholds for the sample-efficiency metric. The upper end matters:
+#: with a well-tuned learning rate every variant clears 200 pipes, so a ceiling
+#: there would collapse the metric back into a tie.
+THRESHOLDS = (10, 50, 100, 250, 500, 1000)
 
 
 def steps_to_threshold(
@@ -83,7 +92,22 @@ AGGREGATED = [
     "gap_offset_mean",
     "truncation_rate",
     "return_mean",
+    "checkpoint_spread",
 ]
+
+
+def resolve_checkpoints(run_dir: Path, spec: str) -> List[str]:
+    """Turns a checkpoint spec into the file names to evaluate.
+
+    ``"late"`` selects every ``model_late_NN.pt`` the run wrote, falling back to
+    the final checkpoint when a run predates that feature. Pooling the episodes
+    of several late checkpoints is what keeps the estimate from depending on
+    which arbitrary moment training happened to stop at.
+    """
+    if spec != "late":
+        return [spec]
+    late = sorted(f.name for f in run_dir.glob("model_late_*.pt"))
+    return late or ["model.pt"]
 
 
 def _evaluate_run(job: Dict[str, object]) -> Dict[str, object]:
@@ -95,18 +119,53 @@ def _evaluate_run(job: Dict[str, object]) -> Dict[str, object]:
     """
     limit_torch_threads(1)
     run_dir = Path(job["run_dir"])
-    model, _, reward_config, env_config = load_run(run_dir, job["checkpoint"])
-    result = evaluate(
-        model,
-        env_config,
-        reward_config,
-        episodes=job["episodes"],
-        seed=job["seed"],
-        deterministic=job["deterministic"],
-        max_steps=job["max_steps"],
-    )
-    result["run"] = run_dir.name
-    result["variant"] = job["variant"]
+    names = job["checkpoints"]
+
+    # Split the episode budget over the checkpoints, so that averaging over the
+    # late phase costs the same as evaluating one checkpoint would have.
+    per_ckpt = max(1, job["episodes"] // len(names))
+    parts = []
+    for offset, name in enumerate(names):
+        model, _, reward_config, env_config = load_run(run_dir, name)
+        parts.append(
+            evaluate(
+                model,
+                env_config,
+                reward_config,
+                episodes=per_ckpt,
+                # Shift the seeds so the checkpoints do not all replay the same
+                # few pipe layouts; the pool then covers more of the task.
+                seed=job["seed"] + offset * 1000,
+                deterministic=job["deterministic"],
+                max_steps=job["max_steps"],
+            )
+        )
+
+    scores = [s for p in parts for s in p["scores"]]
+    result = {
+        "run": run_dir.name,
+        "variant": job["variant"],
+        "n_checkpoints": len(names),
+        "checkpoints": names,
+        "episodes": len(scores),
+        "scores": scores,
+        "score_mean": float(np.mean(scores)),
+        "score_median": float(np.median(scores)),
+        "score_max": int(np.max(scores)),
+        "deterministic": job["deterministic"],
+        # Spread of the per-checkpoint means: how much the policy really moved
+        # over the late phase, as opposed to how much the measurement wobbles.
+        "checkpoint_spread": float(np.std([p["score_mean"] for p in parts])),
+        "checkpoint_means": [float(p["score_mean"]) for p in parts],
+    }
+    for key in (
+        "length_mean",
+        "flap_rate_mean",
+        "gap_offset_mean",
+        "truncation_rate",
+        "return_mean",
+    ):
+        result[key] = float(np.mean([p[key] for p in parts]))
     return result
 
 
@@ -114,7 +173,7 @@ def summarize_study(
     runs_root: Path,
     episodes: int = 50,
     seed: int = 10_000,
-    checkpoint: str = "model.pt",
+    checkpoint: str = "late",
     deterministic: bool = False,
     max_steps: Optional[int] = None,
     workers: int = 1,
@@ -126,7 +185,8 @@ def summarize_study(
         runs_root: Directory holding the study's run directories.
         episodes: Evaluation episodes per run.
         seed: Base seed, shared by every run so the comparison is paired.
-        checkpoint: Which checkpoint to load from each run.
+        checkpoint: ``"late"`` averages over every late checkpoint a run kept;
+            any other value is taken as a single file name.
         deterministic: Use the arg-max action instead of sampling.
         max_steps: Episode step limit for the evaluation.  Deliberately separate
             from the training limit: a limit that a good policy reaches censors
@@ -153,7 +213,7 @@ def summarize_study(
         {
             "run_dir": str(run_dir),
             "variant": variant,
-            "checkpoint": checkpoint,
+            "checkpoints": resolve_checkpoints(run_dir, checkpoint),
             "episodes": episodes,
             "seed": seed,
             "deterministic": deterministic,
@@ -161,7 +221,8 @@ def summarize_study(
         }
         for variant, run_dirs in variants.items()
         for run_dir in run_dirs
-        if (run_dir / checkpoint).exists()
+        if resolve_checkpoints(run_dir, checkpoint)
+        and (run_dir / resolve_checkpoints(run_dir, checkpoint)[0]).exists()
     ]
     print(f"evaluating {len(jobs)} runs on {workers} workers")
 
@@ -235,7 +296,12 @@ def main(argv: Optional[List[str]] = None) -> None:
     parser.add_argument("runs_root", type=Path)
     parser.add_argument("--episodes", type=int, default=50)
     parser.add_argument("--seed", type=int, default=10_000)
-    parser.add_argument("--checkpoint", default="model.pt")
+    parser.add_argument(
+        "--checkpoint",
+        default="late",
+        help="'late' pools the episodes of all model_late_*.pt checkpoints; "
+        "pass a file name to evaluate a single one.",
+    )
     parser.add_argument("--deterministic", action="store_true")
     parser.add_argument(
         "--max-steps",
