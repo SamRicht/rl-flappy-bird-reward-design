@@ -2,14 +2,17 @@
 #
 #     pip install -r requirements.txt
 #
-# The game itself only needs the first three. The rest is required by
-# `flappy_bird_gymnasium.rl`, the PPO implementation and its analysis tools:
-# torch for the networks, matplotlib for the figures, Pillow for the GIF
-# recordings written by `rl.record`.
+# The game itself needs the first three. The rest belongs to the learning
+# methods: torch for the PPO work, tensorflow for the DQN work, matplotlib for
+# the figures, Pillow for the GIF recordings.
 #
-# Deliberately unpinned; the code uses no API that is version-sensitive beyond
+# Deliberately unpinned; no API used here is version-sensitive beyond
 # Gymnasium 1.x, whose `AutoresetMode` the vector environment relies on.
 
 gymnasium>=1.0
 numpy
 pygame
+matplotlib
+tensorflow
+torch
+Pillow
