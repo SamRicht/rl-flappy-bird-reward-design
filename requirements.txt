@@ -13,3 +13,6 @@
 gymnasium>=1.0
 numpy
 pygame
+torch
+matplotlib
+Pillow

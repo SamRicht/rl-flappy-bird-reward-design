@@ -22,6 +22,7 @@
 # ==============================================================================
 
 """Implementation of a Flappy Bird OpenAI gymnasium environment that yields simple
+"""Implementation of a Flappy Bird OpenAI gymnasium environment that yields simple
 numerical information about the game's state as observations.
 
 Some of the code in this module is an adaption of the code in the `FlapPyBird`
@@ -56,6 +57,7 @@ from flappy_bird_gymnasium.envs.constants import (
     PLAYER_WIDTH,
 )
 from flappy_bird_gymnasium.envs.lidar import LIDAR
+from flappy_bird_gymnasium.rl.rewards import RewardConfig, compute_reward
 from flappy_bird_gymnasium.rl.rewards import RewardConfig, compute_reward
 
 
@@ -106,6 +108,9 @@ class FlappyBirdEnv(gymnasium.Env):
         reward_config (Optional[RewardConfig]): The reward scheme to use. If
             `None`, the upstream scheme (alive = +0.1, pipe = +1.0, dead = -1.0,
             ceiling = -0.5) is used.
+        reward_config (Optional[RewardConfig]): The reward scheme to use. If
+            `None`, the upstream scheme (alive = +0.1, pipe = +1.0, dead = -1.0,
+            ceiling = -0.5) is used.
     """
 
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 30}
@@ -123,6 +128,7 @@ class FlappyBirdEnv(gymnasium.Env):
         background: Optional[str] = "day",
         score_limit: Optional[int] = None,
         debug: bool = False,
+        reward_config: Optional[RewardConfig] = None,
         reward_config: Optional[RewardConfig] = None,
     ) -> None:
         assert render_mode is None or render_mode in self.metadata["render_modes"]
@@ -245,6 +251,7 @@ class FlappyBirdEnv(gymnasium.Env):
             pipe_mid_pos = pipe["x"] + PIPE_WIDTH / 2
             if pipe_mid_pos <= player_mid_pos < pipe_mid_pos + 4:
                 self._score += 1
+                passed_pipe = True
                 passed_pipe = True
                 self._sound_cache = "point"
 
@@ -671,10 +678,12 @@ class FlappyBirdEnv(gymnasium.Env):
         )
 
         in_private_zone = bool(np.any(distances < PLAYER_PRIVATE_ZONE))
+        in_private_zone = bool(np.any(distances < PLAYER_PRIVATE_ZONE))
 
         if self._normalize_obs:
             distances = distances / LIDAR_MAX_DISTANCE
 
+        return distances, in_private_zone
         return distances, in_private_zone
 
     def _make_display(self) -> None:
