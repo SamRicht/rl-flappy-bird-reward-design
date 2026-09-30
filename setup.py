@@ -43,12 +43,17 @@ short_description = "A Gymnasium environment for the Flappy Bird game."
 # that is expected to be compatible with the specified version.
 REQUIRED_PACKAGES = [
     "gymnasium>=1.0",
+    "gymnasium>=1.0",
     "numpy",
     "pygame",
     # Needed by `flappy_bird_gymnasium.rl`: torch for the PPO networks,
     # matplotlib for the figures, Pillow for the GIF recordings.
     "torch",
+    # Needed by `flappy_bird_gymnasium.rl`: torch for the PPO networks,
+    # matplotlib for the figures, Pillow for the GIF recordings.
+    "torch",
     "matplotlib",
+    "Pillow",
     "Pillow",
 ]
 
