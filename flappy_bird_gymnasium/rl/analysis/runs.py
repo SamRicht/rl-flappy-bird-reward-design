@@ -94,6 +94,7 @@ class RunLoader:
 #: method joins by adding its line here and a ``RunLoader`` in its package.
 LOADERS: Dict[str, str] = {
     "qlearning": "flappy_bird_gymnasium.qlearning.evaluate:RUN_LOADER",
+    "cnn": "flappy_bird_gymnasium.evaluate_cnn:RUN_LOADER",
 }
 
 

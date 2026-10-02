@@ -146,3 +146,7 @@ runs/
 
 # Leftover recording at the repository root, predating this work.
 /video.gif
+
+# Training outputs
+runs/
+flappy_bird_gymnasium/assets/model/*.pt
