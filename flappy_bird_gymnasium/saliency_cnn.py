@@ -3,6 +3,8 @@
 Usage:
     python -m flappy_bird_gymnasium.saliency_cnn --model runs/v2/shaped_seed0/best.pt
     python -m flappy_bird_gymnasium.saliency_cnn --model ... --target value --frames 8
+    python -m flappy_bird_gymnasium.saliency_cnn --model runs/v2/shaped_seed0/best.pt \
+        --compare runs/v2/legacy_seed0/best.pt --target value --out cmp.png
 
 The agent plays one greedy episode; at `--frames` evenly spaced steps two
 heatmaps are computed for the *decision*, i.e. the advantage of the chosen
@@ -19,6 +21,14 @@ the state value `Q(a*)`):
 
 Both maps are drawn over the current game frame (ground cropped, as the network
 sees it) and saved as one PNG.
+
+With `--compare` two networks are put side by side. Two policies drive the
+game apart - after a few steps they are in different states, and comparing
+their maps row by row would compare different situations. So the episode is
+played by `--model` only, its observations are recorded, and *both* networks
+are evaluated on exactly those observations. The figure then shows Grad-CAM
+of each network plus its Q-values, so the scale of the value estimates can be
+compared too. Which network drove the episode is printed in the figure title.
 """
 
 import argparse
@@ -123,6 +133,52 @@ def upsample(heat, shape):
     return F.interpolate(t, size=shape, mode="bilinear", align_corners=False)[0, 0]
 
 
+def run_label(model_file):
+    """Short name of a checkpoint for figure titles, e.g. `shaped_seed0`."""
+    return os.path.basename(os.path.dirname(os.path.abspath(model_file)))
+
+
+def compare_figure(plt, records, models, labels, target, picks, driver):
+    """Grad-CAM of several networks on the same recorded observations."""
+    n, cols = len(picks), 1 + len(models)
+    fig, axes = plt.subplots(n, cols, figsize=(2.5 * cols, 2.9 * n), squeeze=False)
+    for row, t in enumerate(picks):
+        obs, frame = records[t][0], records[t][1]
+        h, w = frame.shape[:2]
+        ax = axes[row, 0]
+        ax.imshow(frame)
+        ax.set_title(f"t={t}", fontsize=9)
+        line = [f"t={t:<4}"]
+        for col, (model, label) in enumerate(zip(models, labels), start=1):
+            with torch.no_grad():
+                q = model(torch.as_tensor(obs).unsqueeze(0))[0].numpy()
+            cam, action = grad_cam(model, obs, make_target(target, model))
+            ax = axes[row, col]
+            ax.imshow(frame)
+            ax.imshow(
+                upsample(cam, (h, w)).numpy(),
+                cmap="inferno",
+                alpha=0.55,
+                vmin=0,
+                vmax=1,
+            )
+            ax.set_title(
+                f"{label}\n{ACTION_NAMES[action]}  Q={q[0]:.2f}/{q[1]:.2f}",
+                fontsize=8,
+            )
+            line.append(f"{label}: {ACTION_NAMES[action]:4} Q={q[0]:6.2f}/{q[1]:6.2f}")
+        print("  ".join(line))
+    for ax in axes.flat:
+        ax.set_xticks([])
+        ax.set_yticks([])
+    fig.suptitle(
+        f"Grad-CAM ({target}) on the same observations, episode played by {driver}",
+        fontsize=9,
+    )
+    fig.tight_layout()
+    return fig
+
+
 def main():
     args = _get_args()
     import matplotlib
@@ -147,6 +203,20 @@ def main():
     n = min(args.frames, len(records))
     picks = np.linspace(0, len(records) - 1, n).astype(int)
     print(f"episode length {len(records)} steps, showing steps {picks.tolist()}")
+
+    if args.compare:
+        other = load_cnn(
+            args.compare,
+            int(env.action_space.n),
+            input_hw=env.observation_space.shape[1:],
+        )
+        labels = [run_label(args.model), run_label(args.compare)]
+        fig = compare_figure(
+            plt, records, [model, other], labels, args.target, picks, labels[0]
+        )
+        fig.savefig(args.out, dpi=args.dpi)
+        print(f"saved {args.out}")
+        return
 
     fig, axes = plt.subplots(n, 3, figsize=(7.5, 2.9 * n), squeeze=False)
     for row, t in enumerate(picks):
@@ -184,6 +254,13 @@ def main():
 def _get_args():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--model", type=str, required=True, help="checkpoint (.pt)")
+    p.add_argument(
+        "--compare",
+        type=str,
+        default=None,
+        help="second checkpoint, evaluated on the observations of --model's "
+        "episode (same observation model required)",
+    )
     p.add_argument("--frames", type=int, default=6, help="rows in the figure")
     p.add_argument(
         "--target",
@@ -208,9 +285,10 @@ def _get_args():
     p.add_argument("--dpi", type=int, default=130)
     args = p.parse_args()
     if args.out is None:
-        args.out = os.path.join(
-            os.path.dirname(args.model), f"saliency_{args.target}.png"
-        )
+        name = f"saliency_{args.target}.png"
+        if args.compare:
+            name = f"saliency_vs_{run_label(args.compare)}_{args.target}.png"
+        args.out = os.path.join(os.path.dirname(args.model), name)
     return args
 
 

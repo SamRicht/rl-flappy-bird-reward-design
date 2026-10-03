@@ -176,8 +176,12 @@ def backfill_run(run_dir: Path) -> Optional[str]:
     log = run_dir / "log.csv"
     if (run_dir / "summary.json").exists() or not log.exists():
         return None
-    if not (run_dir / "final.pt").exists():
-        return None  # unfinished, leave it to `unfinished_runs` to report
+    # No config.json: an early experiment the loader couldn't read anyway.
+    # No final.pt: unfinished, left to `unfinished_runs` to report.
+    if not (run_dir / "config.json").exists() or not (run_dir / "final.pt").exists():
+        return None
+    if (run_dir / "train.csv").exists():
+        raise SystemExit(f"{run_dir / 'train.csv'} exists but no summary.json")
 
     with log.open(encoding="utf-8") as handle:
         rows = list(csv.DictReader(handle))
