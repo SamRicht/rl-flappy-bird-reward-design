@@ -5,11 +5,6 @@ PyTorch-Implementierung eines Deep Q-Networks für die Gymnasium-Umgebung
 Dueling-Kopf und n-step Returns. Dazu ein Runner für Studien über mehrere Seeds
 und eine Auswertung, deren Zahlen auch neben PPO, Q-Learning und CNN bestehen.
 
-> **[ARBEITSSTAND.md](ARBEITSSTAND.md)** dokumentiert den vollständigen Stand:
-> alle Entscheidungen mit Begründung, die gelaufenen Experimente mit Zahlen, die
-> gefundenen Fehler, die Methodik für den Vier-Wege-Vergleich und die Hypothesen
-> zu den geplanten Läufen. Diese Datei hier ist die Bedienungsanleitung.
-
 ## venv benutzen
 
 Die venv liegt **neben** dem Repo, nicht darin — also unter
@@ -156,7 +151,6 @@ auch die PPO-Arbeit benutzt.
 ```bash
 python -m flappy_bird_gymnasium.dqn.evaluate --checkpoint runs/dqn_v2/best.pt --episodes 50
 python -m flappy_bird_gymnasium.dqn.evaluate --checkpoint runs/dqn_v2/best.pt --render
-python -m flappy_bird_gymnasium.dqn.plot runs/dqn_v2 runs/dqn_v3 --out vergleich.png
 python -m pytest flappy_bird_gymnasium/tests/test_dqn_agent.py -q
 ```
 
@@ -173,7 +167,6 @@ python -m pytest flappy_bird_gymnasium/tests/test_dqn_agent.py -q
 | `evaluate.py` | Greedy-Durchläufe, optional mit Fenster |
 | `experiments.py` | Studien über mehrere Seeds im Prozess-Pool |
 | `summarize.py` | gepaarte Evaluation und Aggregation über Seeds |
-| `plot.py` | Sechs-Panel-Lernkurven, auch für den Vergleich mehrerer Läufe |
 
 Die Reward-Definitionen liegen bewusst **nicht** hier, sondern in
 [`rl/rewards.py`](../rl/rewards.py), gemeinsam mit der PPO-Arbeit.
