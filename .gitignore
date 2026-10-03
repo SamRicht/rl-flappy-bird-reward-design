@@ -146,3 +146,12 @@ runs/
 
 # Leftover recording at the repository root, predating this work.
 /video.gif
+
+# Presentation slides (local only)
+flappy_bird_gymnasium/dqn/PRAESENTATION_FOLIEN.md
+
+# Local-only visualisation scripts and hand-over notes (not needed to understand the training)
+flappy_bird_gymnasium/dqn/figures.py
+flappy_bird_gymnasium/dqn/plot.py
+flappy_bird_gymnasium/dqn/record.py
+flappy_bird_gymnasium/dqn/HANDOFF.md
